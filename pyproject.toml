@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-router"
+version = "0.1.0"
+description = "Local-first Codex-only OpenAI-compatible gateway"
+requires-python = ">=3.8"
+readme = "README.md"
+license = {file = "LICENSE"}
+authors = [{name = "codex-router contributors"}]
+
+[project.scripts]
+codex-router = "codex_router.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
