@@ -25,6 +25,16 @@ login`, `codex login status`, and `CODEX_ACCESS_TOKEN` for trusted automation.
 It does not establish a stable public JSON schema or refresh endpoint for
 third-party clients.
 
+The real-v1 compatibility claim is conditional: the local fixture shape is not
+enough. A profile is marked usable only after a no-cost `GET /v1/models` smoke
+request succeeds against the configured upstream with the access token. The
+compatibility registry records the exact detected Codex CLI version, adapter
+profile, upstream host/path, HTTP result, and date of the smoke check. An
+unknown Codex version cannot be promoted to verified compatibility. A known
+Codex version with a 2xx smoke result is recorded as a verified entry only
+after the exact secret-free evidence is persisted and reviewed; the router
+never self-modifies its own registry.
+
 ## Architecture
 
 ### Real auth adapter
@@ -33,11 +43,25 @@ third-party clients.
 
 - `real-v1` reads `tokens.access_token` and the JWT `exp` claim from the
   configured auth file.
-- It accepts `CODEX_ACCESS_TOKEN` only as an explicit trusted-automation
-  override; the value is never echoed or persisted.
+- File source precedence is explicit: `CODEX_ROUTER_AUTH_FILE` wins, then an
+  explicitly set `CODEX_HOME/auth.json`, then the platform home default. An
+  explicitly set `CODEX_HOME` is authoritative: a missing auth file fails
+  closed and never falls back to another home. Environment-token mode is opt-in
+  only through `CODEX_ROUTER_AUTH_MODE=env`; in that mode `CODEX_ACCESS_TOKEN`
+  is required and the file is not read.
+- A non-JWT environment token is accepted only with an explicit
+  `CODEX_ROUTER_TOKEN_EXPIRES_AT` ISO-8601 value. JWT expiry is required for a
+  JWT-shaped token: missing, non-numeric, malformed, or invalid `exp` is
+  rejected and cannot be overridden by configured expiry. A 60-second
+  clock-skew window treats a valid token as expired before its exact `exp`
+  time.
 - It verifies the file is regular, reads it twice to detect concurrent writes,
   computes only a one-way fingerprint, and discards raw file bytes after
   parsing.
+- It opens files with no-follow semantics where the host supports them,
+  verifies path/file identity before and after reading, rejects symlinks and
+  reparse-point-like paths, and fails closed when required ACL inspection is
+  unavailable. POSIX mode checks and Windows ACL checks are covered separately.
 - It rejects malformed JSON, missing token fields, non-JWT tokens without a
   configured expiry, expired tokens, and unknown adapter versions.
 - It never reads or uses `refresh_token` for network requests.
@@ -50,16 +74,27 @@ not the default adapter.
 
 - The default upstream is `https://api.openai.com/v1`; users can override it
   for a compatible local test service.
-- The router sends the bearer access token only to the configured upstream over
-  HTTPS by default. Plain HTTP is allowed only for loopback upstreams unless a
-  deliberate insecure override is configured for local testing.
-- The local gateway binds to loopback by default.
+- The router sends the bearer access token only to `https://api.openai.com` or
+  a loopback upstream used in local tests. Arbitrary remote custom upstreams
+  are refused, which prevents a configured DNS-rebinding target from becoming
+  a credential exfiltration endpoint. Plain HTTP is allowed only for loopback
+  tests; there is no insecure override in the shipped tool.
+- Upstream URLs cannot contain userinfo, fragments, or embedded credentials;
+  redirects are disabled rather than followed. TLS hostname verification
+  remains enabled for the OpenAI host.
+- The local gateway binds to loopback only; every non-loopback bind is refused,
+  even when a router key is configured.
 - `/health` and `/status` remain unauthenticated but contain only safe status.
 - `/v1/*` requires a router API key. The key is supplied through
-  `CODEX_ROUTER_API_KEY` and compared using constant-time comparison. If no key
-  is configured, `/v1/*` fails closed with setup instructions.
+  `CODEX_ROUTER_API_KEY` and compared using constant-time comparison against
+  the dedicated `X-Codex-Router-Key` header. If no key is configured, `/v1/*`
+  fails closed with setup instructions. This key never authorizes a
+  non-loopback bind; all non-loopback binds are refused.
 - Authorization headers, token-shaped values, request bodies, and upstream
   response bodies are not logged.
+- Request IDs are normalized to a small safe character set before being copied
+  into response headers. Status responses use `Cache-Control: no-store` and
+  contain no credential-shaped fields.
 
 ### Failure behavior
 
@@ -69,6 +104,7 @@ not the default adapter.
 - Missing router key: `401 router_auth_required`.
 - Wrong router key: `403 router_auth_invalid`.
 - Non-loopback HTTP upstream: `503 insecure_upstream`.
+- Upstream `401`: `401 auth_expired` without retrying.
 - Changed credential fingerprint: reject before forwarding and require a fresh
   request.
 
@@ -89,15 +125,19 @@ not the default adapter.
 ## Testing and acceptance
 
 - Add sanitized real-shape fixtures containing only non-secret JWT-shaped data;
-  no real account identifiers or tokens.
+  no real account identifiers or tokens. Tests use an exact allowlist for the
+  fixture's fake values and separately scan all other tracked content.
 - Test JWT expiry parsing, missing/invalid claims, real-shape loading, env
-  override precedence, file safety, router-key auth, insecure upstream refusal,
-  redaction, and stale fingerprint rejection.
+  override precedence, expiry clock skew, file safety, symlink/race/ACL
+  behavior, router-key auth, bind security, insecure upstream refusal,
+  redirect blocking, upstream `401` mapping, redaction, and stale fingerprint
+  rejection.
 - Run the existing unit suite, compile checks, `git diff --check`, and a
   no-secret scan over tracked files.
 - Run a live, no-cost `/v1/models` smoke check only if the local access token
   and network are available; never send a paid chat/completion request without
-  a separate explicit request.
+  a separate explicit request. If the smoke check cannot be completed, keep
+  the profile labeled experimental rather than claiming real usability.
 - Update README and compatibility registry to state that `real-v1` uses the
   current access token and requires `codex login` again after expiry.
 
