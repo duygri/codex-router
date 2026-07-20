@@ -138,3 +138,9 @@ class AuthAdapter:
 
     def health_check(self):
         return self.load_session()
+
+    def current_fingerprint(self):
+        if not os.path.isfile(self.path):
+            return ""
+        data, fingerprint_or_error = self._read_stable()
+        return "" if data is None else fingerprint_or_error
