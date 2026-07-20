@@ -1,0 +1,43 @@
+name: Codex compatibility
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+
+jobs:
+  compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package
+        run: python -m pip install --disable-pip-version-check -e .
+      - name: Run unit and compatibility tests
+        run: python -m unittest discover -s tests -v
+      - name: Validate compatibility registry
+        run: python -m json.tool compatibility/registry.json > /dev/null
+      - name: Check official Codex release signal
+        shell: python
+        run: |
+          import json
+          import urllib.request
+          url = "https://api.github.com/repos/openai/codex/releases/latest"
+          request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "codex-router-compatibility"})
+          try:
+              with urllib.request.urlopen(request, timeout=10) as response:
+                  release = json.load(response)
+              print("Latest official Codex release signal:", release.get("tag_name", "unknown"))
+          except Exception as error:
+              print("Release signal unavailable; manual maintainer review required:", type(error).__name__)
+      - name: Verify pin and rollback behavior
+        run: python -m unittest tests.test_compatibility -v
+      - name: Verify changed fixtures are detected
+        run: python -m unittest tests.test_auth.AuthAdapterTests.test_fingerprint_changes_when_store_changes -v
