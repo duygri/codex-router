@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "adapters": [
+    {
+      "id": "synthetic-v1",
+      "codex_version_range": "unverified",
+      "status": "fixture-only",
+      "release_date": "2026-07-21",
+      "refresh_capability": "reauth_required-or-unsupported",
+      "known_limitations": [
+        "Not a verified Codex CLI auth schema",
+        "No direct OAuth exchange",
+        "No automatic credential-store writes"
+      ]
+    }
+  ]
+}

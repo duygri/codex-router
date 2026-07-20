@@ -5,6 +5,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .gateway import GatewayError
+from .dashboard import build_status, render_html
 
 
 MAX_BODY_BYTES = 1024 * 1024
@@ -14,7 +15,7 @@ def _request_id(handler):
     return handler.headers.get("X-Request-ID") or uuid.uuid4().hex
 
 
-def create_server(gateway, host="127.0.0.1", port=20128):
+def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None):
     class RouterHandler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -30,6 +31,15 @@ def create_server(gateway, host="127.0.0.1", port=20128):
             self.send_header("X-Request-ID", _request_id(self))
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_html(self, body):
+            encoded = body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("X-Request-ID", _request_id(self))
+            self.end_headers()
+            self.wfile.write(encoded)
 
         def _send_error(self, error):
             self._send_json(error.status, {"error": {"code": error.code, "message": error.message}})
@@ -75,6 +85,14 @@ def create_server(gateway, host="127.0.0.1", port=20128):
                 self.wfile.write(response.read())
 
         def do_GET(self):
+            if self.path == "/":
+                status = status_provider() if status_provider else build_status(gateway.auth_adapter)
+                self._send_html(render_html(status))
+                return
+            if self.path == "/status":
+                status = status_provider() if status_provider else build_status(gateway.auth_adapter)
+                self._send_json(200, status)
+                return
             if self.path == "/health":
                 auth = gateway.auth_adapter.health_check()
                 self._send_json(200, {
