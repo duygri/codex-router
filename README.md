@@ -26,6 +26,13 @@ Python 3.8 or newer is required. Install the local package:
 python -m pip install -e .
 ```
 
+If an older Windows pip cannot handle a non-ASCII working-directory path, run directly from the checkout instead:
+
+```powershell
+$env:PYTHONPATH = "$pwd\src"
+python -m codex_router status
+```
+
 Configure the local upstream and credential path explicitly:
 
 ```powershell
