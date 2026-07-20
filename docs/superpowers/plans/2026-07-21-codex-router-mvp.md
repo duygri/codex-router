@@ -37,6 +37,7 @@
 **Files:**
 - Create: `.gitignore`
 - Create: `pyproject.toml`
+- Create: `setup.py`
 - Create: `src/codex_router/__init__.py`
 - Create: `src/codex_router/__main__.py`
 - Create: `tests/__init__.py`
