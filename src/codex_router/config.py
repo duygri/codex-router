@@ -6,6 +6,7 @@ import re
 import secrets
 import stat
 import tempfile
+import math
 from dataclasses import dataclass
 
 
@@ -13,7 +14,10 @@ _ROUTER_KEY_RE = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
 
 
 class ConfigError(Exception):
-    pass
+    def __init__(self, message, code="invalid_config"):
+        super().__init__(message)
+        self.code = code
+        self.message = message
 
 
 def _validate_private_file(path):
@@ -46,6 +50,38 @@ def _read_router_key(path):
         return key, ""
     except (OSError, ValueError, TypeError, ConfigError):
         return "", "router config is invalid"
+
+
+def _parse_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def _parse_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return value
+
+
+def validate_router_config(config, host=None, port=None, require_router_key=True):
+    effective_host = config.bind_host if host is None else host
+    effective_port = config.port if port is None else port
+    if config.adapter_version not in ("real-v1", "synthetic-v1"):
+        raise ConfigError("Supported adapters are real-v1 and synthetic-v1")
+    if (effective_host or "").lower().rstrip(".") not in ("127.0.0.1", "localhost", "::1"):
+        raise ConfigError("Codex Router only supports loopback binds")
+    if isinstance(effective_port, bool) or not isinstance(effective_port, int) or not 1 <= effective_port <= 65535:
+        raise ConfigError("Router port must be an integer from 1 to 65535")
+    if isinstance(config.queue_size, bool) or not isinstance(config.queue_size, int) or config.queue_size < 0:
+        raise ConfigError("Router queue size must be a non-negative integer")
+    if isinstance(config.queue_timeout, bool) or not isinstance(config.queue_timeout, (int, float)) or not math.isfinite(config.queue_timeout) or config.queue_timeout < 0.1:
+        raise ConfigError("Router queue timeout must be finite and at least 0.1 seconds")
+    if require_router_key and not config.router_api_key:
+        raise ConfigError("Router key is not configured; run codex-router init first.")
+    return effective_host, effective_port
 
 
 def initialize_router_config(path):
@@ -118,21 +154,16 @@ class RouterConfig:
             config_error = "router api key is invalid"
         elif not router_api_key:
             router_api_key, config_error = _read_router_key(config_path)
-        try:
-            queue_size = max(0, int(os.environ.get("CODEX_ROUTER_QUEUE_SIZE", "2")))
-        except ValueError:
-            queue_size = 2
-        try:
-            queue_timeout = max(0.1, float(os.environ.get("CODEX_ROUTER_QUEUE_TIMEOUT", "30")))
-        except ValueError:
-            queue_timeout = 30.0
+        port = _parse_int(os.environ.get("CODEX_ROUTER_PORT", "20128"))
+        queue_size = _parse_int(os.environ.get("CODEX_ROUTER_QUEUE_SIZE", "2"))
+        queue_timeout = _parse_float(os.environ.get("CODEX_ROUTER_QUEUE_TIMEOUT", "30"))
         fallback_values = tuple(
             value.strip() for value in os.environ.get("CODEX_ROUTER_MODEL_FALLBACKS", "").split(",")
             if value.strip()
         )
         return cls(
             bind_host=os.environ.get("CODEX_ROUTER_HOST", "127.0.0.1"),
-            port=int(os.environ.get("CODEX_ROUTER_PORT", "20128")),
+            port=port,
             auth_path=auth_path,
             upstream_url=os.environ.get("CODEX_ROUTER_UPSTREAM_URL", "https://api.openai.com/v1"),
             database_path=os.environ.get("CODEX_ROUTER_DATABASE", os.path.join(default_db_dir, "router.sqlite3")),

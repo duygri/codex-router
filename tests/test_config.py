@@ -7,7 +7,7 @@ from unittest import mock
 from contextlib import redirect_stdout
 from io import StringIO
 
-from codex_router.config import ConfigError, RouterConfig, initialize_router_config
+from codex_router.config import ConfigError, RouterConfig, initialize_router_config, validate_router_config
 from codex_router import __main__ as cli
 
 
@@ -100,6 +100,42 @@ class RouterConfigTests(unittest.TestCase):
             result = cli.main_with_args(["key", "--show"])
         self.assertEqual(result, 0)
         self.assertIn(key, output.getvalue())
+
+    def test_invalid_runtime_values_are_preserved_for_fail_closed_validation(self):
+        with mock.patch.dict(os.environ, {
+            "CODEX_ROUTER_API_KEY": "router-secret-0123456789-0123456789-0123456789",
+            "CODEX_ROUTER_PORT": "not-a-port",
+            "CODEX_ROUTER_QUEUE_SIZE": "not-a-size",
+            "CODEX_ROUTER_QUEUE_TIMEOUT": "nan",
+        }, clear=True):
+            config = RouterConfig.from_env()
+
+        with self.assertRaises(ConfigError) as raised:
+            validate_router_config(config)
+        self.assertEqual(raised.exception.code, "invalid_config")
+
+    def test_validation_rejects_unknown_adapter_and_non_loopback_override(self):
+        config = RouterConfig(
+            adapter_version="unknown-v1",
+            router_api_key="router-secret-0123456789-0123456789-0123456789",
+        )
+        with self.assertRaises(ConfigError) as raised:
+            validate_router_config(config)
+        self.assertEqual(raised.exception.code, "invalid_config")
+
+        config = RouterConfig(
+            adapter_version="real-v1",
+            router_api_key="router-secret-0123456789-0123456789-0123456789",
+        )
+        with self.assertRaises(ConfigError):
+            validate_router_config(config, host="0.0.0.0")
+
+    def test_validation_accepts_effective_loopback_port_override(self):
+        config = RouterConfig(
+            adapter_version="real-v1",
+            router_api_key="router-secret-0123456789-0123456789-0123456789",
+        )
+        validate_router_config(config, host="127.0.0.1", port=20129)
 
 
 if __name__ == "__main__":
