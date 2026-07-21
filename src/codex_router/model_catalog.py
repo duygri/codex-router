@@ -12,6 +12,10 @@ class ModelCatalogError(Exception):
         self.message = message
 
 
+def is_safe_model_id(value):
+    return isinstance(value, str) and bool(value) and len(value) <= 256 and "\n" not in value and "\r" not in value
+
+
 class ModelCatalog:
     def __init__(self, fetch_models, ttl_seconds=60, clock=None):
         self.fetch_models = fetch_models
@@ -32,7 +36,7 @@ class ModelCatalog:
             if not isinstance(item, dict):
                 continue
             model_id = item.get("id") or item.get("model")
-            if not isinstance(model_id, str) or not model_id or len(model_id) > 256 or "\n" in model_id or "\r" in model_id:
+            if not is_safe_model_id(model_id):
                 continue
             if model_id in seen:
                 continue
@@ -85,7 +89,7 @@ class ModelCatalog:
         with self.lock:
             self._refresh_if_needed()
             requested = "codex" if model is None else model
-            if not isinstance(requested, str) or not requested or len(requested) > 256 or "\n" in requested or "\r" in requested:
+            if not is_safe_model_id(requested):
                 raise ModelCatalogError(400, "invalid_model", "model must be a short text value")
             if requested == "codex" and "codex" not in self._resolved_ids:
                 return self._resolved_ids[0]
@@ -101,7 +105,7 @@ class ModelCatalog:
             if model not in (None, "codex"):
                 return candidates
             for candidate in fallback_models or ():
-                if not isinstance(candidate, str) or not candidate or len(candidate) > 256 or "\n" in candidate or "\r" in candidate:
+                if not is_safe_model_id(candidate):
                     continue
                 if candidate in self._resolved_ids and candidate not in candidates:
                     candidates.append(candidate)

@@ -1,6 +1,6 @@
 import unittest
 
-from codex_router.model_catalog import ModelCatalog, ModelCatalogError
+from codex_router.model_catalog import ModelCatalog, ModelCatalogError, is_safe_model_id
 
 
 class ModelCatalogTests(unittest.TestCase):
@@ -61,6 +61,13 @@ class ModelCatalogTests(unittest.TestCase):
         candidates = catalog.resolve_candidates("codex", ["gpt-fallback", "unknown", "gpt-primary"])
 
         self.assertEqual(candidates, ["gpt-primary", "gpt-fallback"])
+
+    def test_shared_model_id_validator_is_strict_and_reusable(self):
+        self.assertTrue(is_safe_model_id("gpt-5.6-sol"))
+        self.assertFalse(is_safe_model_id(""))
+        self.assertFalse(is_safe_model_id("a" * 257))
+        self.assertFalse(is_safe_model_id("model\nname"))
+        self.assertFalse(is_safe_model_id(123))
 
 
 if __name__ == "__main__":
