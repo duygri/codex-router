@@ -17,6 +17,13 @@ Never send a real Codex credential file to maintainers or commit it to this repo
 The router is loopback-only. Every `/v1/*` request requires the separate
 `X-Codex-Router-Key`; `/health`, `/status`, and `/` contain safe status only.
 
+The router key is kept separately from SQLite metadata. `codex-router init`
+creates `~/.codex-router/config.json` atomically, rejects symlinks/reparse
+points, and applies private-file permissions where the platform supports them.
+The dashboard exposes only `configured`/`not configured`; it never displays
+the value. `key --show` is intentionally an explicit action for copying the
+secret and should not be used in shared terminals or logs.
+
 For `real-v1`, the router starts the locally installed Codex App Server over
 stdio and does not forward a Codex access or refresh token to an HTTP upstream.
 Each request uses a short-lived App Server process with `approvalPolicy=on-request`,
@@ -37,5 +44,9 @@ token totals when App Server reports them.
 the router invokes it without a shell. Treat the router API key as a local
 code-execution capability: keep it secret, keep the bind on loopback, and do
 not expose the port through a proxy or tunnel without a separate authenticated
-boundary. The App Server protocol is experimental, so compatibility evidence
+boundary. The App Server admission queue is bounded and has a deadline; it
+does not create unbounded local work. Configured model fallbacks are restricted
+to the live catalog and only retry a narrowly classified model-unavailable
+error. Authentication, quota, timeout, transport, and protocol errors are not
+retried against another model. The App Server protocol is experimental, so compatibility evidence
 must identify the exact CLI version before a release is marked verified.

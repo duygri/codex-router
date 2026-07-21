@@ -23,6 +23,18 @@ APP_SERVER_APPROVAL_METHODS = {
     "applyPatchApproval",
     "execCommandApproval",
 }
+
+
+def _is_model_unavailable_error(method, error):
+    if method != "thread/start" or not isinstance(error, dict):
+        return False
+    message = error.get("message")
+    if not isinstance(message, str):
+        return False
+    lowered = message.lower()
+    return "model" in lowered and any(
+        marker in lowered for marker in ("not found", "not available", "unavailable", "unknown", "unsupported")
+    )
 UNSUPPORTED_REQUEST_KEYS = {
     "approvalPolicy",
     "approval_policy",
@@ -157,6 +169,8 @@ class _AppServerSession:
             if message.get("id") != request_id:
                 continue
             if "error" in message:
+                if _is_model_unavailable_error(method, message.get("error")):
+                    raise AppServerError(503, "model_unavailable", "Requested Codex model is unavailable")
                 raise AppServerError(502, "app_server_request_failed", "Codex App Server rejected the request")
             return message.get("result") or {}
 
@@ -338,16 +352,26 @@ class _CompletionResponse:
 class AppServerBridge:
     """Use one short-lived, isolated Codex App Server session per request."""
 
-    def __init__(self, command="codex", process_factory=None, timeout=DEFAULT_TIMEOUT_SECONDS, max_line_bytes=MAX_JSON_LINE_BYTES):
+    def __init__(self, command="codex", process_factory=None, timeout=DEFAULT_TIMEOUT_SECONDS, max_line_bytes=MAX_JSON_LINE_BYTES, queue_size=2, queue_timeout=30.0):
         self.command = command or "codex"
         self.process_factory = process_factory or subprocess.Popen
         self.timeout = timeout
         self.max_line_bytes = max_line_bytes
+        self.queue_size = max(0, int(queue_size))
+        self.queue_timeout = max(0.1, float(queue_timeout))
         self.admission = threading.BoundedSemaphore(1)
+        self.waiting = threading.BoundedSemaphore(self.queue_size)
 
     def _acquire(self):
-        if not self.admission.acquire(blocking=False):
-            raise AppServerError(429, "app_server_busy", "Codex Router is already handling another request")
+        if self.admission.acquire(blocking=False):
+            return
+        if not self.waiting.acquire(blocking=False):
+            raise AppServerError(429, "app_server_queue_full", "Codex Router request queue is full")
+        try:
+            if not self.admission.acquire(timeout=self.queue_timeout):
+                raise AppServerError(429, "app_server_queue_timeout", "Codex Router request queue timed out")
+        finally:
+            self.waiting.release()
 
     def _new_session(self):
         session = _AppServerSession(self.command, self.process_factory, self.timeout, self.max_line_bytes)

@@ -128,8 +128,8 @@ def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, r
                     "status": {"state": "degraded", "message": "Dashboard data is not configured."},
                     "models": [],
                     "usage": {},
-                    "capabilities": {"chat_completions": True, "responses": True, "responses_text_only": True, "tools": False, "multimodal": False},
-                    "endpoint": {"base_url": "http://127.0.0.1:20128/v1", "auth_header": "X-Codex-Router-Key", "model_alias": "codex"},
+                    "capabilities": {"chat_completions": True, "responses": True, "responses_text_only": True, "tools": False, "multimodal": False, "router_key_configured": False, "queue_size": 2, "queue_timeout_seconds": 30.0},
+                    "endpoint": {"base_url": "http://127.0.0.1:20128/v1", "auth_header": "X-Codex-Router-Key", "model_alias": "codex", "router_key_configured": False},
                     "error": {"code": "dashboard_data_unavailable", "message": "Dashboard data is not configured."},
                 }
                 self._send_json(200, data)

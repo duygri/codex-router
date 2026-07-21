@@ -39,14 +39,22 @@ applicable terms and account policies.
 
 ## Setup with a real Codex login
 
-Run `codex login` first, then start the router with a local-only API key:
+Run `codex login` first, then create a local-only router key and start the router:
 
 ```powershell
 $env:PYTHONPATH = "$pwd\src"
-$env:CODEX_ROUTER_API_KEY = "replace-with-a-long-random-local-key"
+python -m codex_router init
 python -m codex_router status
 python -m codex_router serve
 ```
+
+The default key file is `~/.codex-router/config.json`, outside the repository
+and SQLite database. The `init` command creates it atomically with restrictive
+permissions and never prints the key. To copy the key explicitly, run
+`python -m codex_router key --show`; otherwise `python -m codex_router key`
+only reports whether it is configured. `CODEX_ROUTER_CONFIG` can point to a
+different private config file, and `CODEX_ROUTER_API_KEY` can explicitly
+override the file for ephemeral/managed environments.
 
 Use the router key only in the local client request header:
 
@@ -98,6 +106,8 @@ Useful commands:
 codex-router serve [--host HOST] [--port PORT]
 codex-router status
 codex-router reset
+codex-router init
+codex-router key [--show]
 ```
 
 `reset` clears router-owned SQLite metadata and in-memory state. It never
@@ -115,10 +125,14 @@ deletes or modifies the Codex CLI credential store.
 | `CODEX_ACCESS_TOKEN` | unset | Synthetic/fixture compatibility input; never forwarded by real-v1 |
 | `CODEX_ROUTER_TOKEN_EXPIRES_AT` | unset | Required ISO expiry for non-JWT synthetic tokens |
 | `CODEX_ROUTER_API_KEY` | unset | Required for `/v1/*`; use `X-Codex-Router-Key` |
+| `CODEX_ROUTER_CONFIG` | `~/.codex-router/config.json` | Private local JSON file containing the router key |
 | `CODEX_ROUTER_CODEX_COMMAND` | `codex` | Trusted local Codex CLI executable; invoked without a shell |
 | `CODEX_ROUTER_UPSTREAM_URL` | `https://api.openai.com/v1` | Synthetic-v1 compatibility upstream only; ignored by real-v1 |
 | `CODEX_ROUTER_DATABASE` | `~/.codex-router/router.sqlite3` | Non-secret metadata database |
 | `CODEX_ROUTER_ADAPTER` | `real-v1` | Pinned adapter identifier |
+| `CODEX_ROUTER_QUEUE_SIZE` | `2` | Maximum requests waiting behind the active App Server request |
+| `CODEX_ROUTER_QUEUE_TIMEOUT` | `30` seconds | Maximum wait before returning a bounded-queue error |
+| `CODEX_ROUTER_MODEL_FALLBACKS` | unset | Comma-separated live model IDs used only for the `codex` alias |
 
 Real-v1 never forwards bearer credentials to a configurable HTTP upstream.
 For synthetic-v1, arbitrary remote custom upstreams, embedded URL credentials,
@@ -131,6 +145,13 @@ last request time, per-model counts, and optional numeric token totals reported
 by App Server. Prompt text, response text, event payloads, headers, and
 credentials are never stored in SQLite metadata. Responses support is
 text-only; tools and multimodal inputs remain disabled.
+
+The optional model fallback list is resolved against the live Codex model
+catalog. A fallback is attempted only when App Server classifies the requested
+model as unavailable; authentication failures, quota/rate limits, timeouts,
+transport failures, and protocol errors are returned without retrying another
+model. The bounded queue likewise fails closed with a 429 when it is full or
+the wait deadline expires.
 
 ## Compatibility updates
 

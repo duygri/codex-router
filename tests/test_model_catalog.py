@@ -55,6 +55,13 @@ class ModelCatalogTests(unittest.TestCase):
             catalog.list_models()
         self.assertEqual(raised.exception.code, "model_catalog_empty")
 
+    def test_candidates_add_only_configured_live_fallbacks_for_codex_alias(self):
+        catalog = ModelCatalog(lambda: [{"id": "gpt-primary"}, {"id": "gpt-fallback"}])
+
+        candidates = catalog.resolve_candidates("codex", ["gpt-fallback", "unknown", "gpt-primary"])
+
+        self.assertEqual(candidates, ["gpt-primary", "gpt-fallback"])
+
 
 if __name__ == "__main__":
     unittest.main()

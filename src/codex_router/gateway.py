@@ -258,13 +258,18 @@ def _validate_upstream_url(value):
 
 
 class Gateway:
-    def __init__(self, auth_adapter, upstream_url, opener=None, timeout=30, app_server=None, app_server_command="codex", model_catalog=None, usage_tracker=None):
+    def __init__(self, auth_adapter, upstream_url, opener=None, timeout=30, app_server=None, app_server_command="codex", app_server_queue_size=2, app_server_queue_timeout=30.0, model_catalog=None, usage_tracker=None, model_fallbacks=()):
         self.auth_adapter = auth_adapter
         self.upstream_url = (upstream_url or "").rstrip("/")
         self.opener = opener or build_opener(_NoRedirectHandler())
         self.timeout = timeout
         self.app_server = app_server or (
-            AppServerBridge(command=app_server_command, timeout=timeout)
+            AppServerBridge(
+                command=app_server_command,
+                timeout=timeout,
+                queue_size=app_server_queue_size,
+                queue_timeout=app_server_queue_timeout,
+            )
             if getattr(auth_adapter, "adapter_version", "") == "real-v1"
             else None
         )
@@ -272,6 +277,7 @@ class Gateway:
         if self.model_catalog is None and isinstance(self.app_server, AppServerBridge):
             self.model_catalog = ModelCatalog(self.app_server.list_model_items)
         self.usage_tracker = usage_tracker
+        self.model_fallbacks = tuple(model_fallbacks or ())
 
     def _authenticate(self):
         loaded = self.auth_adapter.load_session()
@@ -326,6 +332,11 @@ class Gateway:
     def _map_model_catalog_error(error):
         return GatewayError(error.status, error.code, error.message)
 
+    def _model_candidates(self, model):
+        if self.model_catalog is not None:
+            return self.model_catalog.resolve_candidates(model, self.model_fallbacks)
+        return [model]
+
     def open_chat(self, payload):
         if getattr(self.auth_adapter, "adapter_version", "") != "real-v1":
             return self.open_upstream("POST", "/chat/completions", payload)
@@ -333,13 +344,27 @@ class Gateway:
             raise GatewayError(503, "app_server_unavailable", "Codex App Server is not configured")
         usage_handle = None
         try:
-            if self.model_catalog is not None:
-                resolved = self.model_catalog.resolve(payload.get("model"))
-                payload = dict(payload)
-                payload["model"] = resolved
-            response = self.app_server.start_chat(payload)
+            candidates = self._model_candidates(payload.get("model"))
+            response = None
+            selected_model = payload.get("model")
+            for index, candidate in enumerate(candidates):
+                request_payload = dict(payload)
+                if candidate:
+                    request_payload["model"] = candidate
+                else:
+                    request_payload.pop("model", None)
+                try:
+                    response = self.app_server.start_chat(request_payload)
+                    selected_model = candidate
+                    payload = request_payload
+                    break
+                except AppServerError as error:
+                    if error.code != "model_unavailable" or index + 1 >= len(candidates):
+                        raise
+            if response is None:
+                raise AppServerError(503, "model_unavailable", "No configured Codex model is available")
             if self.usage_tracker is not None:
-                usage_handle = self.usage_tracker.begin(payload.get("model") or "codex")
+                usage_handle = self.usage_tracker.begin(selected_model or "codex")
                 setter = getattr(response, "set_usage_callback", None)
                 if setter:
                     setter(usage_handle.record_token_usage)
@@ -417,11 +442,22 @@ class Gateway:
             raise GatewayError(503, "app_server_unavailable", "Codex App Server is not configured")
         messages = self._responses_messages(payload)
         try:
-            model = self.model_catalog.resolve(payload.get("model")) if self.model_catalog is not None else payload.get("model")
-            chat_payload = {"messages": messages, "stream": bool(payload.get("stream", False))}
-            if model:
-                chat_payload["model"] = model
-            response = self.app_server.start_chat(chat_payload)
+            candidates = self._model_candidates(payload.get("model"))
+            response = None
+            model = payload.get("model")
+            for index, candidate in enumerate(candidates):
+                chat_payload = {"messages": messages, "stream": bool(payload.get("stream", False))}
+                if candidate:
+                    chat_payload["model"] = candidate
+                try:
+                    response = self.app_server.start_chat(chat_payload)
+                    model = candidate
+                    break
+                except AppServerError as error:
+                    if error.code != "model_unavailable" or index + 1 >= len(candidates):
+                        raise
+            if response is None:
+                raise AppServerError(503, "model_unavailable", "No configured Codex model is available")
             translated = _ResponsesResponse(response, model, bool(payload.get("stream", False)))
             if self.usage_tracker is not None:
                 usage_handle = self.usage_tracker.begin(model or "codex")

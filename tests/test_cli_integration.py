@@ -69,16 +69,20 @@ class CliIntegrationTests(unittest.TestCase):
                 "CODEX_ROUTER_AUTH_FILE": auth_path,
                 "CODEX_ROUTER_DATABASE": db_path,
                 "CODEX_ROUTER_UPSTREAM_URL": "http://127.0.0.1:9000/v1",
-                "CODEX_ROUTER_API_KEY": "router-secret",
+                "CODEX_ROUTER_API_KEY": "router-secret-0123456789-0123456789-0123456789",
                 "CODEX_ROUTER_CODEX_COMMAND": "codex-test",
+                "CODEX_ROUTER_QUEUE_SIZE": "4",
+                "CODEX_ROUTER_QUEUE_TIMEOUT": "1.5",
             },
             clear=False,
         ), mock.patch.object(cli, "create_server", side_effect=fake_create_server):
             result = cli.main_with_args(["serve", "--port", "20129"])
         self.assertEqual(result, 0)
-        self.assertEqual(captured["router_api_key"], "router-secret")
+        self.assertEqual(captured["router_api_key"], "router-secret-0123456789-0123456789-0123456789")
         self.assertEqual(captured["gateway"].auth_adapter.adapter_version, "real-v1")
         self.assertEqual(captured["gateway"].app_server.command, "codex-test")
+        self.assertEqual(captured["gateway"].app_server.queue_size, 4)
+        self.assertEqual(captured["gateway"].app_server.queue_timeout, 1.5)
         self.assertIsNotNone(captured["dashboard_data_provider"])
 
     def test_run_server_passes_router_key_and_loopback(self):

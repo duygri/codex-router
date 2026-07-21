@@ -6,6 +6,7 @@ from unittest import mock
 from urllib.error import HTTPError
 
 from codex_router.auth import AuthAdapter
+from codex_router.app_server import AppServerError
 from codex_router.gateway import Gateway, GatewayError
 from codex_router.model_catalog import ModelCatalog
 from codex_router.storage import MetadataStore
@@ -326,6 +327,67 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("event: response.output_text.delta", body)
         self.assertIn('"delta":"hello"', body)
         self.assertIn("event: response.completed", body)
+
+    def test_codex_alias_uses_configured_live_fallback_after_model_unavailable(self):
+        app_server = mock.Mock()
+        app_server.start_chat.side_effect = [
+            AppServerError(503, "model_unavailable", "Requested Codex model is unavailable"),
+            FakeResponse(body=json.dumps({
+                "id": "chatcmpl-fallback",
+                "model": "gpt-fallback",
+                "choices": [{"message": {"role": "assistant", "content": "fallback"}, "finish_reason": "stop"}],
+            }).encode("utf-8")),
+        ]
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=ModelCatalog(lambda: [{"id": "gpt-primary"}, {"id": "gpt-fallback"}]),
+            model_fallbacks=("gpt-fallback",),
+        )
+
+        response = gateway.open_chat({"model": "codex", "messages": [{"role": "user", "content": "hello"}]})
+        self.assertIn(b"fallback", response.read())
+        self.assertEqual([call.args[0]["model"] for call in app_server.start_chat.call_args_list], ["gpt-primary", "gpt-fallback"])
+
+    def test_model_fallback_never_retries_auth_or_quota_errors(self):
+        app_server = mock.Mock()
+        app_server.start_chat.side_effect = AppServerError(401, "auth_expired", "Run codex login")
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=ModelCatalog(lambda: [{"id": "gpt-primary"}, {"id": "gpt-fallback"}]),
+            model_fallbacks=("gpt-fallback",),
+        )
+
+        with self.assertRaises(GatewayError) as raised:
+            gateway.open_chat({"model": "codex", "messages": [{"role": "user", "content": "hello"}]})
+        self.assertEqual(raised.exception.code, "auth_expired")
+        app_server.start_chat.assert_called_once()
+
+    def test_responses_alias_uses_configured_live_fallback(self):
+        app_server = mock.Mock()
+        app_server.start_chat.side_effect = [
+            AppServerError(503, "model_unavailable", "Requested Codex model is unavailable"),
+            FakeResponse(body=json.dumps({
+                "id": "chatcmpl-response-fallback",
+                "model": "gpt-fallback",
+                "choices": [{"message": {"role": "assistant", "content": "fallback"}, "finish_reason": "stop"}],
+            }).encode("utf-8")),
+        ]
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=ModelCatalog(lambda: [{"id": "gpt-primary"}, {"id": "gpt-fallback"}]),
+            model_fallbacks=("gpt-fallback",),
+        )
+
+        response = gateway.open_responses({"model": "codex", "input": "hello"})
+
+        self.assertIn(b"fallback", response.read())
+        self.assertEqual([call.args[0]["model"] for call in app_server.start_chat.call_args_list], ["gpt-primary", "gpt-fallback"])
 
 
 if __name__ == "__main__":

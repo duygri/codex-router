@@ -32,6 +32,10 @@ def build_status(auth_adapter, store=None, config=None):
         "refresh": "reauth_required_or_unsupported",
         "bind_host": getattr(config, "bind_host", "127.0.0.1"),
         "port": getattr(config, "port", 20128),
+        "router_key": "configured" if getattr(config, "router_api_key", "") else "not_configured",
+        "config_error": getattr(config, "config_error", "") or None,
+        "queue_size": getattr(config, "queue_size", 2),
+        "queue_timeout": getattr(config, "queue_timeout", 30.0),
     }
 
 
@@ -45,7 +49,7 @@ def build_dashboard_data(auth_adapter, store, config, gateway):
         "transport": "codex-app-server" if real_profile else "direct-test-upstream",
         "approval_policy": "on-request" if real_profile else "synthetic-test-only",
         "sandbox": "read-only" if real_profile else "synthetic-test-only",
-        "message": None,
+        "message": "Router key is not configured; run codex-router init." if not getattr(config, "router_api_key", "") else None,
     }
     models = []
     error = None
@@ -68,6 +72,9 @@ def build_dashboard_data(auth_adapter, store, config, gateway):
         "sandbox": status["sandbox"],
         "tools": False,
         "multimodal": False,
+        "router_key_configured": bool(getattr(config, "router_api_key", "")),
+        "queue_size": getattr(config, "queue_size", 2),
+        "queue_timeout_seconds": getattr(config, "queue_timeout", 30.0),
     }
     bind_host = getattr(config, "bind_host", "127.0.0.1") if config is not None else "127.0.0.1"
     port = getattr(config, "port", 20128) if config is not None else 20128
@@ -80,6 +87,7 @@ def build_dashboard_data(auth_adapter, store, config, gateway):
             "base_url": "http://%s:%s/v1" % (bind_host, port),
             "auth_header": "X-Codex-Router-Key",
             "model_alias": "codex",
+            "router_key_configured": bool(getattr(config, "router_api_key", "")),
         },
         "error": error,
     }
@@ -170,6 +178,7 @@ def render_html(status):
           <div class="endpoint-item"><span class="label">Base URL</span><code id="endpoint-base">__ENDPOINT__</code></div>
           <div class="endpoint-item"><span class="label">Router header</span><code id="endpoint-auth">X-Codex-Router-Key</code></div>
           <div class="endpoint-item"><span class="label">Default model alias</span><code id="endpoint-model">codex</code></div>
+          <div class="endpoint-item"><span class="label">Router key</span><code id="endpoint-key-state">__KEY_STATE__</code></div>
           <p class="muted">The key value is intentionally never rendered here. Configure it only in your local client environment.</p>
         </div>
       </section>
@@ -202,6 +211,7 @@ def render_html(status):
         document.getElementById('endpoint-base').textContent = text(endpoint.base_url);
         document.getElementById('endpoint-auth').textContent = text(endpoint.auth_header);
         document.getElementById('endpoint-model').textContent = text(endpoint.model_alias);
+        document.getElementById('endpoint-key-state').textContent = endpoint.router_key_configured ? 'configured' : 'not configured';
         models.replaceChildren();
         if (!(data.models || []).length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = 'No model data available.'; models.appendChild(empty); }
         (data.models || []).forEach(function (model) { const row = document.createElement('div'); row.className = 'model-row'; const id = document.createElement('span'); id.className = 'model-id'; id.textContent = text(model.id); const meta = document.createElement('span'); meta.className = 'model-meta'; meta.textContent = model.alias ? 'alias: ' + model.alias : text(model.owned_by); row.append(id, meta); models.appendChild(row); });
@@ -222,6 +232,7 @@ def render_html(status):
         "__SANDBOX__": safe("sandbox"),
         "__APPROVAL__": safe("approval_policy"),
         "__ENDPOINT__": "http://%s:%s/v1" % (safe("bind_host", "127.0.0.1"), safe("port", "20128")),
+        "__KEY_STATE__": safe("router_key", "not_configured"),
     }
     for marker, value in replacements.items():
         template = template.replace(marker, value)

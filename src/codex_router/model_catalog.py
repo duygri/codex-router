@@ -92,3 +92,17 @@ class ModelCatalog:
             if requested in self._resolved_ids:
                 return requested
             raise ModelCatalogError(400, "unknown_model", "Requested model is not available")
+
+    def resolve_candidates(self, model=None, fallback_models=()):
+        """Return a primary model and only configured, currently live fallbacks."""
+        with self.lock:
+            primary = self.resolve(model)
+            candidates = [primary]
+            if model not in (None, "codex"):
+                return candidates
+            for candidate in fallback_models or ():
+                if not isinstance(candidate, str) or not candidate or len(candidate) > 256 or "\n" in candidate or "\r" in candidate:
+                    continue
+                if candidate in self._resolved_ids and candidate not in candidates:
+                    candidates.append(candidate)
+            return candidates
