@@ -6,12 +6,13 @@ import os
 import sys
 
 from .auth import AuthAdapter
-from .config import ConfigError, RouterConfig, initialize_router_config
+from .config import ConfigError, RouterConfig, initialize_router_config, validate_router_config
 from .dashboard import build_dashboard_data, build_status
 from .gateway import Gateway
 from .server import create_server
 from .storage import MetadataStore
 from .usage import UsageTracker
+from .readiness import doctor_report
 
 
 def build_parser():
@@ -23,6 +24,7 @@ def build_parser():
     subparsers.add_parser("status", help="print safe local status")
     subparsers.add_parser("reset", help="clear router metadata without touching Codex auth")
     subparsers.add_parser("init", help="create a local router key config")
+    subparsers.add_parser("doctor", help="run safe Codex readiness diagnostics")
     key = subparsers.add_parser("key", help="inspect local router key setup")
     key.add_argument("--show", action="store_true", help="print the key explicitly")
     return parser
@@ -63,9 +65,21 @@ def main_with_args(argv):
         else:
             print("Router key is configured at %s (use --show only when copying it)." % config.config_path)
         return 0
+    if args.command == "doctor":
+        report = doctor_report(config)
+        print(json.dumps(report.to_dict(), separators=(",", ":")))
+        if report.status == "ready":
+            return 0
+        return 2 if report.status == "invalid_config" else 1
     if config.config_error and args.command == "serve":
         print("Router configuration is invalid; run codex-router init or fix the configured key file.", file=sys.stderr)
         return 2
+    if args.command == "serve":
+        try:
+            validate_router_config(config, host=args.host, port=args.port)
+        except ConfigError:
+            print("Router configuration is invalid; fix the configured values before serving.", file=sys.stderr)
+            return 2
     store = _open_store(config)
     auth = AuthAdapter(config.auth_path, adapter_version=config.adapter_version, auth_mode=config.auth_mode)
     try:

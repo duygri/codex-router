@@ -3,11 +3,14 @@ import os
 import tempfile
 import unittest
 from unittest import mock
+from contextlib import redirect_stdout
+from io import StringIO
 
 from codex_router import __main__ as cli
 from codex_router.auth import AuthAdapter
 from codex_router.config import RouterConfig
 from codex_router.gateway import Gateway
+from codex_router.readiness import CheckResult, ReadinessReport
 from codex_router.server import run_server
 
 
@@ -95,6 +98,39 @@ class CliIntegrationTests(unittest.TestCase):
         with mock.patch("codex_router.server.create_server", side_effect=fake_create_server):
             run_server(Gateway(AuthAdapter("missing.json", adapter_version="synthetic-v1"), "http://127.0.0.1:9000/v1"), router_api_key="router-secret")
         self.assertEqual(captured, {"host": "127.0.0.1", "port": 20128, "router_api_key": "router-secret"})
+
+    def test_doctor_runs_before_store_and_emits_safe_json(self):
+        with tempfile.TemporaryDirectory() as root:
+            database_path = os.path.join(root, "metadata", "router.sqlite3")
+            report = ReadinessReport("ready", {
+                "config": CheckResult.ok("Configuration is valid"),
+                "codex_cli": CheckResult.skipped("Not required for synthetic-v1"),
+                "app_server": CheckResult.skipped("Not required for synthetic-v1"),
+                "model_catalog": CheckResult.skipped("Not required for synthetic-v1"),
+            })
+            output = StringIO()
+            with mock.patch.dict(os.environ, {
+                "CODEX_ROUTER_ADAPTER": "synthetic-v1",
+                "CODEX_ROUTER_DATABASE": database_path,
+                "CODEX_ROUTER_API_KEY": "router-secret-0123456789-0123456789-0123456789",
+            }, clear=True), mock.patch.object(cli, "doctor_report", return_value=report) as doctor, redirect_stdout(output):
+                result = cli.main_with_args(["doctor"])
+
+            self.assertEqual(result, 0)
+            self.assertEqual(json.loads(output.getvalue())["status"], "ready")
+            self.assertFalse(os.path.exists(database_path))
+            doctor.assert_called_once()
+
+    def test_doctor_rejects_invalid_config_without_running_probe(self):
+        output = StringIO()
+        with mock.patch.dict(os.environ, {
+            "CODEX_ROUTER_ADAPTER": "unknown-v1",
+            "CODEX_ROUTER_API_KEY": "router-secret-0123456789-0123456789-0123456789",
+        }, clear=True), redirect_stdout(output):
+            result = cli.main_with_args(["doctor"])
+
+        self.assertEqual(result, 2)
+        self.assertEqual(json.loads(output.getvalue())["status"], "invalid_config")
 
 
 if __name__ == "__main__":
