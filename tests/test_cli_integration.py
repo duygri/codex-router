@@ -62,8 +62,8 @@ class CliIntegrationTests(unittest.TestCase):
         self.addCleanup(lambda: os.path.exists(db_path) and os.remove(db_path))
         captured = {}
 
-        def fake_create_server(gateway, host, port, status_provider=None, router_api_key=None, dashboard_data_provider=None):
-            captured.update({"gateway": gateway, "host": host, "port": port, "router_api_key": router_api_key, "dashboard_data_provider": dashboard_data_provider})
+        def fake_create_server(gateway, host, port, status_provider=None, router_api_key=None, dashboard_data_provider=None, readiness_provider=None):
+            captured.update({"gateway": gateway, "host": host, "port": port, "router_api_key": router_api_key, "dashboard_data_provider": dashboard_data_provider, "readiness_provider": readiness_provider})
             return _FakeServer()
 
         with mock.patch.dict(
@@ -87,6 +87,7 @@ class CliIntegrationTests(unittest.TestCase):
         self.assertEqual(captured["gateway"].app_server.queue_size, 4)
         self.assertEqual(captured["gateway"].app_server.queue_timeout, 1.5)
         self.assertIsNotNone(captured["dashboard_data_provider"])
+        self.assertIsNotNone(captured["readiness_provider"])
 
     def test_run_server_passes_router_key_and_loopback(self):
         captured = {}

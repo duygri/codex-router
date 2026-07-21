@@ -7,6 +7,7 @@ from codex_router.auth import AuthAdapter
 from codex_router.config import RouterConfig
 from codex_router.dashboard import build_dashboard_data, build_status, render_html
 from codex_router.__main__ import build_parser
+from codex_router.readiness import CheckResult, ReadinessReport
 from codex_router.storage import MetadataStore
 
 
@@ -113,6 +114,42 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(data["status"]["state"], "degraded")
         self.assertEqual(data["models"], [])
         self.assertEqual(data["error"]["code"], "dashboard_data_unavailable")
+        self.assertNotIn("prompt=secret", json.dumps(data))
+
+    def test_dashboard_uses_shared_readiness_provider_without_raw_details(self):
+        class FakeGateway:
+            usage_tracker = None
+
+            def dashboard_models(self):
+                return []
+
+        class FakeReadiness:
+            def __init__(self):
+                self.calls = 0
+
+            def check(self):
+                self.calls += 1
+                return ReadinessReport("not_ready", {
+                    "config": CheckResult.ok("Configuration is valid"),
+                    "codex_cli": CheckResult.failure("codex_cli_unavailable", "Codex CLI is unavailable"),
+                    "app_server": CheckResult.skipped("Not checked because a prerequisite failed"),
+                    "model_catalog": CheckResult.skipped("Not checked because a prerequisite failed"),
+                })
+
+        readiness = FakeReadiness()
+        config = RouterConfig(auth_path=self.auth_path, adapter_version="real-v1")
+        data = build_dashboard_data(
+            AuthAdapter(self.auth_path, adapter_version="real-v1"),
+            None,
+            config,
+            FakeGateway(),
+            readiness_probe=readiness,
+        )
+
+        self.assertEqual(data["status"]["state"], "degraded")
+        self.assertIn("readiness", data["status"])
+        self.assertIn("Codex CLI is unavailable", data["status"]["message"])
+        self.assertEqual(readiness.calls, 1)
         self.assertNotIn("prompt=secret", json.dumps(data))
 
     def test_cli_has_serve_status_and_reset_commands(self):

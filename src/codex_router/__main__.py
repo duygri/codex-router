@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import replace
 
 from .auth import AuthAdapter
 from .config import ConfigError, RouterConfig, initialize_router_config, validate_router_config
@@ -12,7 +13,7 @@ from .gateway import Gateway
 from .server import create_server
 from .storage import MetadataStore
 from .usage import UsageTracker
-from .readiness import doctor_report
+from .readiness import ReadinessProbe, doctor_report
 
 
 def build_parser():
@@ -90,8 +91,8 @@ def main_with_args(argv):
             store.reset()
             print("Router metadata reset; Codex CLI session was not changed.")
             return 0
-        host = args.host or config.bind_host
-        port = args.port or config.port
+        host = args.host if args.host is not None else config.bind_host
+        port = args.port if args.port is not None else config.port
         gateway = Gateway(
             auth,
             config.upstream_url,
@@ -101,13 +102,16 @@ def main_with_args(argv):
             model_fallbacks=config.model_fallbacks,
             usage_tracker=UsageTracker(store),
         )
+        readiness_config = replace(config, bind_host=host, port=port)
+        readiness_probe = ReadinessProbe(readiness_config)
         server = create_server(
             gateway,
             host,
             port,
             lambda: build_status(auth, store, config),
             router_api_key=config.router_api_key,
-            dashboard_data_provider=lambda: build_dashboard_data(auth, store, config, gateway),
+            dashboard_data_provider=lambda: build_dashboard_data(auth, store, readiness_config, gateway, readiness_probe=readiness_probe),
+            readiness_provider=readiness_probe.check,
         )
         print("Codex Router listening on http://%s:%s" % (host, port))
         try:

@@ -39,7 +39,7 @@ def build_status(auth_adapter, store=None, config=None):
     }
 
 
-def build_dashboard_data(auth_adapter, store, config, gateway):
+def build_dashboard_data(auth_adapter, store, config, gateway, readiness_probe=None):
     health = auth_adapter.health_check()
     real_profile = getattr(auth_adapter, "adapter_version", "") == "real-v1"
     status = {
@@ -51,6 +51,18 @@ def build_dashboard_data(auth_adapter, store, config, gateway):
         "sandbox": "read-only" if real_profile else "synthetic-test-only",
         "message": "Router key is not configured; run codex-router init." if not getattr(config, "router_api_key", "") else None,
     }
+    if readiness_probe is not None:
+        try:
+            readiness = readiness_probe.check().to_dict()
+            status["readiness"] = readiness["status"]
+            if readiness["status"] != "ready":
+                status["state"] = "degraded"
+                failed = next((item for item in readiness["checks"].values() if not item.get("ok")), None)
+                status["message"] = ("Readiness: " + failed["message"]) if failed else "Codex readiness is not available; retry refresh."
+        except Exception:
+            status["state"] = "degraded"
+            status["readiness"] = "not_ready"
+            status["message"] = "Readiness is temporarily unavailable; retry refresh."
     models = []
     error = None
     try:
