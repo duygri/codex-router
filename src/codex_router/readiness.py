@@ -1,6 +1,5 @@
 """Bounded, secret-free Codex CLI and App Server readiness diagnostics."""
 
-import math
 import re
 import subprocess
 import threading
