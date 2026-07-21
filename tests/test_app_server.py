@@ -266,6 +266,26 @@ class AppServerBridgeTests(unittest.TestCase):
             bridge.probe_models(timeout=3)
         self.assertEqual(raised.exception.code, "model_catalog_invalid")
 
+    def test_readiness_probe_accepts_known_codex_metadata_and_matching_alias_fields(self):
+        bridge, _ = self.make_bridge(models=[{
+            "id": "gpt-test",
+            "model": "gpt-test",
+            "displayName": "Test",
+            "description": "Safe metadata",
+            "hidden": False,
+            "isDefault": True,
+            "supportedReasoningEfforts": ["medium"],
+        }])
+
+        models = bridge.probe_models(timeout=3)
+
+        self.assertEqual(models[0]["id"], "gpt-test")
+
+        bridge, _ = self.make_bridge(models=[{"id": "gpt-test", "unexpected": "field"}])
+        with self.assertRaises(AppServerError) as raised:
+            bridge.probe_models(timeout=3)
+        self.assertEqual(raised.exception.code, "model_catalog_invalid")
+
         bridge, _ = self.make_bridge(models=[{"id": "gpt-test"}, {"id": "bad\nmodel"}])
         with self.assertRaises(AppServerError) as raised:
             bridge.probe_models(timeout=3)

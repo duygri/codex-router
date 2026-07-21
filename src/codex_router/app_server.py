@@ -25,6 +25,22 @@ APP_SERVER_APPROVAL_METHODS = {
     "applyPatchApproval",
     "execCommandApproval",
 }
+READINESS_MODEL_METADATA_KEYS = {
+    "additionalSpeedTiers",
+    "availabilityNux",
+    "defaultReasoningEffort",
+    "defaultServiceTier",
+    "description",
+    "displayName",
+    "hidden",
+    "inputModalities",
+    "isDefault",
+    "serviceTiers",
+    "supportedReasoningEfforts",
+    "supportsPersonality",
+    "upgrade",
+    "upgradeInfo",
+}
 
 
 def _is_model_unavailable_error(method, error):
@@ -466,13 +482,20 @@ class AppServerBridge:
             raise AppServerError(502, "app_server_protocol_error", "Codex App Server returned an invalid model list")
         if not models:
             raise AppServerError(503, "model_catalog_empty", "Codex returned no available models")
-        allowed_keys = {"id", "model"}
+        allowed_keys = {"id", "model"}.union(READINESS_MODEL_METADATA_KEYS)
         validated = []
         for item in models:
             if not isinstance(item, dict) or set(item).difference(allowed_keys):
                 raise AppServerError(503, "model_catalog_invalid", "Codex returned an invalid model catalog")
-            present = [key for key in allowed_keys if key in item]
-            if len(present) != 1 or not is_safe_model_id(item.get(present[0])):
+            has_id = "id" in item
+            has_model = "model" in item
+            if not has_id and not has_model:
+                raise AppServerError(503, "model_catalog_invalid", "Codex returned an invalid model catalog")
+            if has_id and not is_safe_model_id(item.get("id")):
+                raise AppServerError(503, "model_catalog_invalid", "Codex returned an invalid model catalog")
+            if has_model and not is_safe_model_id(item.get("model")):
+                raise AppServerError(503, "model_catalog_invalid", "Codex returned an invalid model catalog")
+            if has_id and has_model and item["id"] != item["model"]:
                 raise AppServerError(503, "model_catalog_invalid", "Codex returned an invalid model catalog")
             validated.append(dict(item))
         return validated
