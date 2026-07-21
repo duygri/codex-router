@@ -24,6 +24,7 @@ applicable terms and account policies.
 
 - Loopback-only HTTP server on `127.0.0.1:20128` by default.
 - `/health`, `/status`, and a local status page at `/`.
+- `/ready` for a bounded Codex CLI/App Server readiness report.
 - OpenAI-compatible `/v1/models` and `/v1/chat/completions` routes.
 - Text-only `/v1/responses` compatibility for clients that use the Responses API.
 - `/v1/models` is mapped from Codex App Server `model/list`.
@@ -45,6 +46,7 @@ Run `codex login` first, then create a local-only router key and start the route
 $env:PYTHONPATH = "$pwd\src"
 python -m codex_router init
 python -m codex_router status
+python -m codex_router doctor
 python -m codex_router serve
 ```
 
@@ -85,6 +87,13 @@ Codex CLI first with `codex login`. The App Server process is short-lived and
 isolated per request in the current MVP. Approval and client-side tool requests
 fail closed.
 
+`codex-router doctor` performs an independent, uncached diagnostic before
+opening SQLite. It checks the local CLI version, App Server initialization and
+model discovery without sending a prompt. `GET /ready` uses the in-process
+serialized probe: it caches both ready and not-ready results for 10 seconds,
+allows a caller to wait at most 2 seconds for an in-flight probe, and bounds
+CLI/App Server checks to 2/3 seconds. A waiter timeout is not cached.
+
 Python 3.8 or newer is required. Install the local package when pip supports
 the checkout path:
 
@@ -108,6 +117,7 @@ codex-router status
 codex-router reset
 codex-router init
 codex-router key [--show]
+codex-router doctor
 ```
 
 `reset` clears router-owned SQLite metadata and in-memory state. It never
@@ -133,6 +143,13 @@ deletes or modifies the Codex CLI credential store.
 | `CODEX_ROUTER_QUEUE_SIZE` | `2` | Maximum requests waiting behind the active App Server request |
 | `CODEX_ROUTER_QUEUE_TIMEOUT` | `30` seconds | Maximum wait before returning a bounded-queue error |
 | `CODEX_ROUTER_MODEL_FALLBACKS` | unset | Comma-separated live model IDs used only for the `codex` alias |
+
+`doctor` and `/ready` return only a fixed four-check JSON envelope. Invalid
+configuration uses `invalid_config`; synthetic-v1 marks Codex-specific checks
+as `skipped`. App Server model-list identifiers must be safe and agree when
+both `id` and `model` are present; only known non-secret metadata is accepted.
+Malformed mixed catalogs fail closed. Diagnostic output is bounded and raw
+subprocess output is never returned.
 
 Real-v1 never forwards bearer credentials to a configurable HTTP upstream.
 For synthetic-v1, arbitrary remote custom upstreams, embedded URL credentials,

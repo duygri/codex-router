@@ -16,6 +16,9 @@ Never send a real Codex credential file to maintainers or commit it to this repo
 
 The router is loopback-only. Every `/v1/*` request requires the separate
 `X-Codex-Router-Key`; `/health`, `/status`, and `/` contain safe status only.
+`/ready` is also loopback-only and contains only a fixed readiness envelope;
+it never accepts a prompt and does not expose credentials or raw subprocess
+output.
 
 The router key is kept separately from SQLite metadata. `codex-router init`
 creates `~/.codex-router/config.json` atomically, rejects symlinks/reparse
@@ -50,3 +53,11 @@ to the live catalog and only retry a narrowly classified model-unavailable
 error. Authentication, quota, timeout, transport, and protocol errors are not
 retried against another model. The App Server protocol is experimental, so compatibility evidence
 must identify the exact CLI version before a release is marked verified.
+
+`codex-router doctor` is an independent uncached diagnostic that runs before
+SQLite and gateway construction. The in-process `/ready` probe serializes
+concurrent checks, caches both success and failure for 10 seconds, and returns
+a safe waiter timeout after 2 seconds without starting another process. CLI
+version checks are limited to 2 seconds/64 KiB; App Server initialize and
+`model/list` checks are each limited to 3 seconds/1 MiB per JSON line. Probe
+processes are terminated and escalated to kill when necessary.

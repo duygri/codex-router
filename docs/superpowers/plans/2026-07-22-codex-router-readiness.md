@@ -56,7 +56,7 @@
 - [ ] **Step 1: Write failing tests** for the exact sequence `initialize`, `initialized`, `model/list`, with no `thread/start` or `turn/start`; include missing/empty catalog, mixed valid/malformed entries, both `id` and `model`, unknown fields, oversized JSON lines, timeout, and cleanup.
 - [ ] **Step 2: Run the focused tests and verify they fail** because the bridge has no readiness-only session operation.
 - [ ] **Step 3: Implement a readiness session method** that bypasses normal request admission, starts one process, performs the exact JSON-RPC sequence, uses independent 3-second handshake/model-list deadlines, and closes in `finally`.
-- [ ] **Step 4: Implement strict raw catalog validation**: each item must be an object with exactly one present key (`id` or `model`), the other absent, no unknown fields, and a non-empty ID passing the shared safe validator. Map empty, invalid, protocol and transport cases to the stable readiness codes while preserving normal `list_model_items` behavior.
+- [ ] **Step 4: Implement strict raw catalog validation**: each item must have a safe `id` or `model`; if both are present they must agree; only known non-secret Codex metadata fields are allowed, and unknown fields fail the whole list. Empty, invalid, conflicting, mixed, protocol and transport cases map to stable readiness codes while preserving normal `list_model_items` behavior.
 - [ ] **Step 5: Enforce 1 MiB App Server JSON-line cap** and safe failure on overflow; keep version-output cap in the CLI probe task. Ensure terminate→kill escalation and process-group cleanup when supported.
 - [ ] **Step 6: Run App Server tests and verify they pass.**
 - [ ] **Step 7: Commit** with `git commit -m "feat: add bounded Codex readiness probe"`.

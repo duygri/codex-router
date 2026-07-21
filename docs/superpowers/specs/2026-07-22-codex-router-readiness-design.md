@@ -139,21 +139,26 @@ details.
   timeout, malformed JSON, and empty model catalog as safe readiness failures.
 - Never retry a failed readiness probe inside the same request.
 - Use the existing `ModelCatalog` model-ID validation rules for non-empty
-  `model/list` results, but validate the raw list strictly before normalization:
-  every item must be an object with exactly one of the keys `id` or `model`
-  present; the other key must be absent, not null or empty. The one present
-  value must be a non-empty string passing the existing safe model-ID
-  validator. An item containing both keys, neither key, an invalid value, or
-  an unknown field is invalid and makes the whole list
-  `model_catalog_invalid`. A mixed valid/malformed list is therefore never
-  partially accepted. An empty list is `model_catalog_empty`; App Server
-  protocol/transport failures map to `model_catalog_unavailable`.
+  `model/list` results, but validate the raw list strictly before normalization.
+  Each item must have a safe `id` or `model`; if both are present they must be
+  non-empty safe strings with equal values, matching the current Codex App
+  Server response. The allowed non-secret metadata fields are
+  `displayName`, `description`, `hidden`, `isDefault`, `inputModalities`,
+  `supportedReasoningEfforts`, `defaultReasoningEffort`, `defaultServiceTier`,
+  `serviceTiers`, `additionalSpeedTiers`, `supportsPersonality`, `upgrade`,
+  `upgradeInfo`, and `availabilityNux`; unknown fields remain invalid. An item
+  with neither identifier, an invalid identifier, conflicting `id`/`model`, or
+  an unknown field makes the whole list `model_catalog_invalid`. A mixed
+  valid/malformed list is never partially accepted. An empty list is
+  `model_catalog_empty`; App Server protocol/transport failures map to
+  `model_catalog_unavailable`.
 - Preserve the existing fixed App Server policy and no-direct-bearer design.
 
 ## Testing strategy
 
 - Unit tests for CLI version success/failure, App Server handshake success,
-  timeout/malformed response, empty catalog, and process cleanup.
+  timeout/malformed response, empty catalog, real Codex metadata with matching
+  `id`/`model`, conflicting identifiers, unknown fields, and process cleanup.
 - HTTP tests for `/health` remaining cheap, `/ready` status mapping, safe
   envelope fields, loopback restriction, and synthetic-v1 behavior.
 - Coordination tests for 10-second cache reuse, 2-second waiter timeout, and
