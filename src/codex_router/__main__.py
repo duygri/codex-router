@@ -6,10 +6,11 @@ import os
 
 from .auth import AuthAdapter
 from .config import RouterConfig
-from .dashboard import build_status
+from .dashboard import build_dashboard_data, build_status
 from .gateway import Gateway
 from .server import create_server
 from .storage import MetadataStore
+from .usage import UsageTracker
 
 
 def build_parser():
@@ -53,13 +54,19 @@ def main_with_args(argv):
             return 0
         host = args.host or config.bind_host
         port = args.port or config.port
-        gateway = Gateway(auth, config.upstream_url, app_server_command=config.codex_command)
+        gateway = Gateway(
+            auth,
+            config.upstream_url,
+            app_server_command=config.codex_command,
+            usage_tracker=UsageTracker(store),
+        )
         server = create_server(
             gateway,
             host,
             port,
             lambda: build_status(auth, store, config),
             router_api_key=config.router_api_key,
+            dashboard_data_provider=lambda: build_dashboard_data(auth, store, config, gateway),
         )
         print("Codex Router listening on http://%s:%s" % (host, port))
         try:

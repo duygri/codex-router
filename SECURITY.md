@@ -24,6 +24,12 @@ Each request uses a short-lived App Server process with `approvalPolicy=on-reque
 policies, invoke tools, or approve commands are rejected. Only agent text
 deltas are exposed, and App Server event payloads are not logged.
 
+The dashboard at `/` and its safe `/dashboard/data` endpoint expose only local
+operational metadata. `/dashboard/data` does not require the router key because
+it contains no credentials, prompt content, response content, or raw App Server
+events; `/v1/*` continues to require `X-Codex-Router-Key`. Usage tracking stores
+only aggregate counters and validated model identifiers.
+
 `CODEX_ROUTER_CODEX_COMMAND` must point to a trusted local Codex CLI executable;
 the router invokes it without a shell. Treat the router API key as a local
 code-execution capability: keep it secret, keep the bind on loopback, and do

@@ -7,6 +7,9 @@ from urllib.error import HTTPError
 
 from codex_router.auth import AuthAdapter
 from codex_router.gateway import Gateway, GatewayError
+from codex_router.model_catalog import ModelCatalog
+from codex_router.storage import MetadataStore
+from codex_router.usage import UsageTracker
 
 
 class FakeResponse:
@@ -150,6 +153,24 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         app_server.start_chat.assert_called_once_with(payload)
 
+    def test_real_profile_resolves_codex_alias_before_starting_chat(self):
+        app_server = mock.Mock()
+        app_server.start_chat.return_value = FakeResponse()
+        catalog = ModelCatalog(lambda: [{"id": "gpt-router"}])
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=catalog,
+        )
+
+        gateway.open_chat({"model": "codex", "messages": [{"role": "user", "content": "hello"}]})
+
+        app_server.start_chat.assert_called_once_with({
+            "model": "gpt-router",
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+
     def test_real_profile_lists_models_from_app_server(self):
         app_server = mock.Mock()
         app_server.list_models.return_value = FakeResponse()
@@ -161,6 +182,68 @@ class GatewayTests(unittest.TestCase):
         response = gateway.open_models()
         self.assertEqual(response.status, 200)
         app_server.list_models.assert_called_once_with()
+
+    def test_real_profile_lists_catalog_alias_and_normalized_models(self):
+        app_server = mock.Mock()
+        catalog = ModelCatalog(lambda: [{"id": "gpt-router"}, {"model": "gpt-fast"}])
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=catalog,
+        )
+
+        response = gateway.open_models()
+        payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual([item["id"] for item in payload["data"]], ["codex", "gpt-router", "gpt-fast"])
+        self.assertEqual(payload["data"][0]["owned_by"], "codex-router")
+
+    def test_chat_usage_completes_when_response_is_read(self):
+        handle, path = tempfile.mkstemp(suffix=".sqlite3")
+        os.close(handle)
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        store = MetadataStore(path)
+        self.addCleanup(store.close)
+        tracker = UsageTracker(store)
+        app_server = mock.Mock()
+        app_server.start_chat.return_value = FakeResponse()
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=ModelCatalog(lambda: [{"id": "gpt-router"}]),
+            usage_tracker=tracker,
+        )
+
+        response = gateway.open_chat({"model": "codex", "messages": [{"role": "user", "content": "hello"}]})
+        response.read()
+
+        self.assertEqual(tracker.snapshot()["completed_requests"], 1)
+        self.assertEqual(tracker.snapshot()["active_requests"], 0)
+
+    def test_chat_usage_is_cancelled_when_stream_is_closed_early(self):
+        handle, path = tempfile.mkstemp(suffix=".sqlite3")
+        os.close(handle)
+        self.addCleanup(lambda: os.path.exists(path) and os.remove(path))
+        store = MetadataStore(path)
+        self.addCleanup(store.close)
+        tracker = UsageTracker(store)
+        app_server = mock.Mock()
+        app_server.start_chat.return_value = FakeResponse(content_type="text/event-stream")
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=ModelCatalog(lambda: [{"id": "gpt-router"}]),
+            usage_tracker=tracker,
+        )
+
+        response = gateway.open_chat({"stream": True, "messages": [{"role": "user", "content": "hello"}]})
+        response.close()
+
+        self.assertEqual(tracker.snapshot()["cancelled_requests"], 1)
+        self.assertEqual(tracker.snapshot()["active_requests"], 0)
 
 
 if __name__ == "__main__":

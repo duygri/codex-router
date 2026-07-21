@@ -24,7 +24,7 @@ def _is_loopback_bind(host):
     return (host or "").lower().rstrip(".") in ("127.0.0.1", "localhost", "::1")
 
 
-def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, router_api_key=None):
+def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, router_api_key=None, dashboard_data_provider=None):
     if not _is_loopback_bind(host):
         raise ValueError("Codex Router only supports loopback binds")
 
@@ -123,6 +123,16 @@ def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, r
                     response.close()
 
         def do_GET(self):
+            if self.path == "/dashboard/data":
+                data = dashboard_data_provider() if dashboard_data_provider else {
+                    "status": {"state": "degraded", "message": "Dashboard data is not configured."},
+                    "models": [],
+                    "usage": {},
+                    "capabilities": {},
+                    "error": {"code": "dashboard_data_unavailable", "message": "Dashboard data is not configured."},
+                }
+                self._send_json(200, data)
+                return
             if self.path == "/":
                 status = status_provider() if status_provider else build_status(gateway.auth_adapter)
                 self._send_html(render_html(status))

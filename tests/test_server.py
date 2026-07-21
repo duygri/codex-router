@@ -120,6 +120,39 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(request_ids)
         self.assertNotIn("\n", request_ids[0])
 
+    def test_dashboard_data_is_safe_local_json_without_router_key(self):
+        dashboard_server = create_server(
+            Gateway(AuthAdapter(self.auth_path, adapter_version="synthetic-v1"), "http://127.0.0.1:9000/v1"),
+            "127.0.0.1",
+            0,
+            router_api_key="router-secret",
+            dashboard_data_provider=lambda: {
+                "status": {"state": "ok"},
+                "models": [{"id": "codex", "alias": "codex", "owned_by": "codex-router", "available": True}],
+                "usage": {"total_requests": 0},
+                "capabilities": {"tools": False},
+                "error": None,
+            },
+        )
+        thread = threading.Thread(target=dashboard_server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(dashboard_server.server_close)
+        self.addCleanup(dashboard_server.shutdown)
+
+        connection = http.client.HTTPConnection("127.0.0.1", dashboard_server.server_port, timeout=5)
+        connection.request("GET", "/dashboard/data")
+        response = connection.getresponse()
+        body = response.read()
+        headers = response.getheaders()
+        connection.close()
+
+        self.assertEqual(response.status, 200)
+        self.assertIn(("Content-Type", "application/json"), headers)
+        self.assertIn(("Cache-Control", "no-store"), headers)
+        self.assertIn(b'"models"', body)
+        self.assertNotIn(b"router-secret", body)
+        self.assertNotIn(b"SYNTHETIC_ACCESS_TOKEN_ONLY", body)
+
     def test_non_loopback_bind_is_refused_even_with_router_key(self):
         gateway = Gateway(AuthAdapter(self.auth_path, adapter_version="synthetic-v1"), "http://127.0.0.1:9000/v1")
         with self.assertRaises(ValueError):

@@ -59,8 +59,8 @@ class CliIntegrationTests(unittest.TestCase):
         self.addCleanup(lambda: os.path.exists(db_path) and os.remove(db_path))
         captured = {}
 
-        def fake_create_server(gateway, host, port, status_provider=None, router_api_key=None):
-            captured.update({"gateway": gateway, "host": host, "port": port, "router_api_key": router_api_key})
+        def fake_create_server(gateway, host, port, status_provider=None, router_api_key=None, dashboard_data_provider=None):
+            captured.update({"gateway": gateway, "host": host, "port": port, "router_api_key": router_api_key, "dashboard_data_provider": dashboard_data_provider})
             return _FakeServer()
 
         with mock.patch.dict(
@@ -79,11 +79,12 @@ class CliIntegrationTests(unittest.TestCase):
         self.assertEqual(captured["router_api_key"], "router-secret")
         self.assertEqual(captured["gateway"].auth_adapter.adapter_version, "real-v1")
         self.assertEqual(captured["gateway"].app_server.command, "codex-test")
+        self.assertIsNotNone(captured["dashboard_data_provider"])
 
     def test_run_server_passes_router_key_and_loopback(self):
         captured = {}
 
-        def fake_create_server(gateway, host, port, status_provider=None, router_api_key=None):
+        def fake_create_server(gateway, host, port, status_provider=None, router_api_key=None, dashboard_data_provider=None):
             captured.update({"host": host, "port": port, "router_api_key": router_api_key})
             return _FakeServer()
 

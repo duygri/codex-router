@@ -195,12 +195,14 @@ class _AppServerSession:
 
 
 class _MemoryResponse:
-    def __init__(self, body, content_type="application/json"):
+    def __init__(self, body, content_type="application/json", headers=None):
         self.status = 200
         self.headers = {
             "Content-Type": content_type,
             "Content-Length": str(len(body)),
         }
+        if headers:
+            self.headers.update(headers)
         self._body = body
 
     def read(self, size=-1):
@@ -419,6 +421,18 @@ class AppServerBridge:
             raise
 
     def list_models(self):
+        models = self.list_model_items()
+        data = []
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            model_id = model.get("id") or model.get("model")
+            if isinstance(model_id, str) and model_id:
+                data.append({"id": model_id, "object": "model", "created": 0, "owned_by": "codex"})
+        body = json.dumps({"object": "list", "data": data}, separators=(",", ":")).encode("utf-8")
+        return _MemoryResponse(body)
+
+    def list_model_items(self):
         self._acquire()
         session = None
         try:
@@ -427,15 +441,7 @@ class AppServerBridge:
             models = result.get("data") if isinstance(result, dict) else None
             if not isinstance(models, list):
                 raise AppServerError(502, "app_server_protocol_error", "Codex App Server returned an invalid model list")
-            data = []
-            for model in models:
-                if not isinstance(model, dict):
-                    continue
-                model_id = model.get("id") or model.get("model")
-                if isinstance(model_id, str) and model_id:
-                    data.append({"id": model_id, "object": "model", "created": 0, "owned_by": "codex"})
-            body = json.dumps({"object": "list", "data": data}, separators=(",", ":")).encode("utf-8")
-            return _MemoryResponse(body)
+            return models
         finally:
             if session is not None:
                 session.close()

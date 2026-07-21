@@ -27,6 +27,8 @@ applicable terms and account policies.
 - OpenAI-compatible `/v1/models` and `/v1/chat/completions` routes.
 - `/v1/models` is mapped from Codex App Server `model/list`.
 - Text-only chat input and streaming text deltas from Codex App Server.
+- Local `codex` model alias plus normalized live model catalog.
+- Local operations dashboard with aggregate usage counters and capability status.
 - Fixed `approvalPolicy=on-request`, `sandbox=read-only`, and ephemeral threads.
 - Tool, approval, command-output, and other non-text events are not exposed.
 - A separate `X-Codex-Router-Key` boundary for every `/v1/*` request.
@@ -49,6 +51,12 @@ Use the router key only in the local client request header:
 ```powershell
 curl.exe http://127.0.0.1:20128/v1/models -H "X-Codex-Router-Key: replace-with-a-long-random-local-key"
 ```
+
+Open `http://127.0.0.1:20128/` for the local operations dashboard. It shows
+model availability, aggregate request counters, and fixed security capabilities;
+it never asks for or displays the router key. `model: "codex"` resolves to the
+first model reported by the local Codex App Server. Model discovery is cached
+briefly; a stale cache is marked degraded rather than silently hidden.
 
 The router launches `codex app-server --listen stdio://`; authenticate the
 Codex CLI first with `codex login`. The App Server process is short-lived and
@@ -103,6 +111,10 @@ For synthetic-v1, arbitrary remote custom upstreams, embedded URL credentials,
 redirects, and plain HTTP outside loopback are refused. Never put secrets in
 source control, command history, request logs, SQLite metadata, fixtures, or
 bug reports.
+
+Usage data is aggregate-only: request totals, terminal counts, active count,
+last request time, and per-model counts. Prompt text, response text, event
+payloads, headers, and credentials are never stored in SQLite metadata.
 
 ## Compatibility updates
 
