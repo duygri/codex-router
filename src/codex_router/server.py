@@ -24,7 +24,7 @@ def _is_loopback_bind(host):
     return (host or "").lower().rstrip(".") in ("127.0.0.1", "localhost", "::1")
 
 
-def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, router_api_key=None, dashboard_data_provider=None):
+def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, router_api_key=None, dashboard_data_provider=None, readiness_provider=None):
     if not _is_loopback_bind(host):
         raise ValueError("Codex Router only supports loopback binds")
 
@@ -123,6 +123,33 @@ def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, r
                     response.close()
 
         def do_GET(self):
+            if self.path == "/ready":
+                try:
+                    report = readiness_provider() if readiness_provider else None
+                    if report is None:
+                        payload = {
+                            "status": "not_ready",
+                            "checks": {
+                                "config": {"ok": False, "code": "diagnostic_failed", "message": "Readiness is not configured"},
+                                "codex_cli": {"ok": True, "code": "skipped", "message": "Not checked because a prerequisite failed"},
+                                "app_server": {"ok": True, "code": "skipped", "message": "Not checked because a prerequisite failed"},
+                                "model_catalog": {"ok": True, "code": "skipped", "message": "Not checked because a prerequisite failed"},
+                            },
+                        }
+                    else:
+                        payload = report.to_dict() if hasattr(report, "to_dict") else report
+                    self._send_json(200 if payload.get("status") == "ready" else 503, payload)
+                except Exception:
+                    self._send_json(503, {
+                        "status": "not_ready",
+                        "checks": {
+                            "config": {"ok": False, "code": "diagnostic_failed", "message": "Diagnostic check failed"},
+                            "codex_cli": {"ok": True, "code": "skipped", "message": "Not checked because a prerequisite failed"},
+                            "app_server": {"ok": True, "code": "skipped", "message": "Not checked because a prerequisite failed"},
+                            "model_catalog": {"ok": True, "code": "skipped", "message": "Not checked because a prerequisite failed"},
+                        },
+                    })
+                return
             if self.path == "/dashboard/data":
                 data = dashboard_data_provider() if dashboard_data_provider else {
                     "status": {"state": "degraded", "message": "Dashboard data is not configured."},
@@ -175,8 +202,11 @@ def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, r
     return ThreadingHTTPServer((host, port), RouterHandler)
 
 
-def run_server(gateway, host="127.0.0.1", port=20128, router_api_key=None):
-    server = create_server(gateway, host, port, router_api_key=router_api_key)
+def run_server(gateway, host="127.0.0.1", port=20128, router_api_key=None, readiness_provider=None):
+    kwargs = {"router_api_key": router_api_key}
+    if readiness_provider is not None:
+        kwargs["readiness_provider"] = readiness_provider
+    server = create_server(gateway, host, port, **kwargs)
     try:
         server.serve_forever()
     finally:

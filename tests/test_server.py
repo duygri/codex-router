@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from codex_router.auth import AuthAdapter
 from codex_router.gateway import Gateway
+from codex_router.readiness import CheckResult, ReadinessReport
 from codex_router.server import create_server
 
 
@@ -65,7 +66,25 @@ class ServerTests(unittest.TestCase):
             AuthAdapter(self.auth_path, adapter_version="synthetic-v1"),
             "http://127.0.0.1:%s/v1" % self.upstream.server_port,
         )
-        self.server = create_server(gateway, "127.0.0.1", 0, router_api_key="router-secret")
+        self.readiness_calls = 0
+        self.readiness_report = ReadinessReport("ready", {
+            "config": CheckResult.ok("Configuration is valid"),
+            "codex_cli": CheckResult.skipped("Not required for synthetic-v1"),
+            "app_server": CheckResult.skipped("Not required for synthetic-v1"),
+            "model_catalog": CheckResult.skipped("Not required for synthetic-v1"),
+        })
+
+        def readiness_provider():
+            self.readiness_calls += 1
+            return self.readiness_report
+
+        self.server = create_server(
+            gateway,
+            "127.0.0.1",
+            0,
+            router_api_key="router-secret",
+            readiness_provider=readiness_provider,
+        )
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.server.server_close)
@@ -162,6 +181,25 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b'"models"', body)
         self.assertNotIn(b"router-secret", body)
         self.assertNotIn(b"SYNTHETIC_ACCESS_TOKEN_ONLY", body)
+        self.assertEqual(self.readiness_calls, 0)
+
+    def test_ready_returns_exact_safe_envelope_and_maps_not_ready(self):
+        status, _, body = self.request("GET", "/ready")
+        self.assertEqual(status, 200)
+        payload = json.loads(body.decode("utf-8"))
+        self.assertEqual(payload["status"], "ready")
+        self.assertEqual(set(payload["checks"]), {"config", "codex_cli", "app_server", "model_catalog"})
+        self.assertEqual(self.readiness_calls, 1)
+
+        self.readiness_report = ReadinessReport("not_ready", {
+            "config": CheckResult.ok("Configuration is valid"),
+            "codex_cli": CheckResult.failure("codex_cli_unavailable", "Codex CLI is unavailable"),
+            "app_server": CheckResult.skipped("Not checked because a prerequisite failed"),
+            "model_catalog": CheckResult.skipped("Not checked because a prerequisite failed"),
+        })
+        status, _, body = self.request("GET", "/ready")
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body.decode("utf-8"))["status"], "not_ready")
 
     def test_non_loopback_bind_is_refused_even_with_router_key(self):
         gateway = Gateway(AuthAdapter(self.auth_path, adapter_version="synthetic-v1"), "http://127.0.0.1:9000/v1")
