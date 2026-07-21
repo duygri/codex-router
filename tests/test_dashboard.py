@@ -30,7 +30,7 @@ class DashboardTests(unittest.TestCase):
         self.addCleanup(store.close)
         store.set("adapter_version", "synthetic-v1")
         config = RouterConfig(auth_path=self.auth_path, database_path=self.db_path)
-        status = build_status(AuthAdapter(self.auth_path), store, config)
+        status = build_status(AuthAdapter(self.auth_path, adapter_version="synthetic-v1"), store, config)
         self.assertEqual(status["auth"], "valid")
         self.assertEqual(status["adapter"], "synthetic-v1")
         self.assertNotIn("access_token", json.dumps(status))
@@ -40,6 +40,13 @@ class DashboardTests(unittest.TestCase):
         html = render_html({"auth": "valid", "adapter": "synthetic-v1"})
         self.assertIn("Codex Router", html)
         self.assertNotIn("SYNTHETIC_ACCESS_TOKEN_ONLY", html)
+
+    def test_real_status_advertises_app_server_and_safe_capabilities(self):
+        config = RouterConfig(auth_path="missing.json", adapter_version="real-v1")
+        status = build_status(AuthAdapter("missing.json", adapter_version="real-v1"), config=config)
+        self.assertEqual(status["transport"], "codex-app-server")
+        self.assertEqual(status["approval_policy"], "on-request")
+        self.assertEqual(status["sandbox"], "read-only")
 
     def test_cli_has_serve_status_and_reset_commands(self):
         parser = build_parser()

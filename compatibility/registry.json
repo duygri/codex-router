@@ -2,6 +2,21 @@
   "schema": 1,
   "adapters": [
     {
+      "id": "real-v1",
+      "codex_version_range": "unknown (pin exact CLI/App Server version before verification)",
+      "status": "experimental-unverified",
+      "release_date": "2026-07-21",
+      "refresh_capability": "reauth_required",
+      "verification_evidence": "compatibility/verification/real-v1.json",
+      "known_limitations": [
+        "Uses the locally installed Codex App Server over stdio",
+        "No direct bearer forwarding, OAuth exchange, or undocumented refresh endpoint",
+        "Run codex login again after the CLI session expires",
+        "Text-only MVP; tools and approval requests fail closed",
+        "Known CLI/App Server version and a reviewed model/list smoke check are required for verified status"
+      ]
+    },
+    {
       "id": "synthetic-v1",
       "codex_version_range": "unverified",
       "status": "fixture-only",

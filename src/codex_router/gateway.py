@@ -2,9 +2,11 @@
 
 import json
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 from .auth import RefreshOutcome, SessionStatus
+from .app_server import AppServerBridge, AppServerError, _MemoryResponse
 
 
 class GatewayError(Exception):
@@ -15,12 +17,47 @@ class GatewayError(Exception):
         self.message = message
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        raise GatewayError(502, "upstream_redirect_blocked", "Upstream redirects are disabled")
+
+
+def _is_loopback(hostname):
+    return (hostname or "").lower().rstrip(".") in ("127.0.0.1", "localhost", "::1")
+
+
+def _validate_upstream_url(value):
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        raise GatewayError(503, "unsafe_upstream", "Configured upstream URL is invalid")
+    if parsed.username or parsed.password or parsed.fragment or parsed.query or not parsed.hostname:
+        raise GatewayError(503, "unsafe_upstream", "Configured upstream URL is unsafe")
+    hostname = parsed.hostname.lower().rstrip(".")
+    if hostname == "api.openai.com":
+        if parsed.scheme != "https" or parsed.port not in (None, 443):
+            raise GatewayError(503, "unsafe_upstream", "OpenAI upstream must use HTTPS")
+        return
+    if _is_loopback(hostname):
+        if parsed.scheme not in ("http", "https"):
+            raise GatewayError(503, "unsafe_upstream", "Loopback upstream scheme is invalid")
+        return
+    if parsed.scheme == "http":
+        raise GatewayError(503, "insecure_upstream", "Non-loopback upstream must use HTTPS")
+    raise GatewayError(503, "unsafe_upstream", "Remote custom upstreams are disabled")
+
+
 class Gateway:
-    def __init__(self, auth_adapter, upstream_url, opener=None, timeout=30):
+    def __init__(self, auth_adapter, upstream_url, opener=None, timeout=30, app_server=None, app_server_command="codex"):
         self.auth_adapter = auth_adapter
         self.upstream_url = (upstream_url or "").rstrip("/")
-        self.opener = opener or urlopen
+        self.opener = opener or build_opener(_NoRedirectHandler())
         self.timeout = timeout
+        self.app_server = app_server or (
+            AppServerBridge(command=app_server_command, timeout=timeout)
+            if getattr(auth_adapter, "adapter_version", "") == "real-v1"
+            else None
+        )
 
     def _authenticate(self):
         loaded = self.auth_adapter.load_session()
@@ -38,8 +75,11 @@ class Gateway:
             raise GatewayError(401, "auth_expired", "Codex session changed; reauthenticate and retry")
 
     def open_upstream(self, method, path, payload=None):
+        if getattr(self.auth_adapter, "adapter_version", "") == "real-v1":
+            raise GatewayError(501, "direct_bearer_disabled", "real-v1 uses Codex App Server instead of direct bearer forwarding")
         if not self.upstream_url:
             raise GatewayError(503, "upstream_not_configured", "Set CODEX_ROUTER_UPSTREAM_URL before sending requests")
+        _validate_upstream_url(self.upstream_url)
         session, fingerprint = self._authenticate()
         self.ensure_session_current(fingerprint)
 
@@ -52,8 +92,44 @@ class Gateway:
             request.add_header("Content-Type", "application/json")
 
         try:
+            if hasattr(self.opener, "open"):
+                return self.opener.open(request, timeout=self.timeout)
             return self.opener(request, timeout=self.timeout)
+        except GatewayError:
+            raise
         except HTTPError as exc:
+            if exc.code == 401:
+                raise GatewayError(401, "auth_expired", "Codex access token was rejected; run codex login")
             raise GatewayError(exc.code, "upstream_error", "Upstream returned an HTTP error")
         except URLError:
             raise GatewayError(502, "upstream_unavailable", "Upstream could not be reached")
+
+    @staticmethod
+    def _map_app_server_error(error):
+        return GatewayError(error.status, error.code, error.message)
+
+    def open_chat(self, payload):
+        if getattr(self.auth_adapter, "adapter_version", "") != "real-v1":
+            return self.open_upstream("POST", "/chat/completions", payload)
+        if self.app_server is None:
+            raise GatewayError(503, "app_server_unavailable", "Codex App Server is not configured")
+        try:
+            response = self.app_server.start_chat(payload)
+            if not payload.get("stream") and hasattr(response, "iter_bytes"):
+                try:
+                    return _MemoryResponse(b"".join(response.iter_bytes()))
+                finally:
+                    response.close()
+            return response
+        except AppServerError as error:
+            raise self._map_app_server_error(error)
+
+    def open_models(self):
+        if getattr(self.auth_adapter, "adapter_version", "") != "real-v1":
+            return self.open_upstream("GET", "/models")
+        if self.app_server is None:
+            raise GatewayError(503, "app_server_unavailable", "Codex App Server is not configured")
+        try:
+            return self.app_server.list_models()
+        except AppServerError as error:
+            raise self._map_app_server_error(error)

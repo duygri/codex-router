@@ -1,0 +1,10 @@
+{
+  "adapter_profile": "real-v1",
+  "checked_at": null,
+  "codex_version": "unknown",
+  "http_status": null,
+  "safe_error_code": null,
+  "status": "unverified",
+  "transport": "codex-app-server",
+  "transport_endpoint": "stdio"
+}

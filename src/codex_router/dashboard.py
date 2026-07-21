@@ -6,10 +6,14 @@ import html
 def build_status(auth_adapter, store=None, config=None):
     health = auth_adapter.health_check()
     stored = {} if store is None else store.snapshot()
+    real_profile = getattr(auth_adapter, "adapter_version", "") == "real-v1"
     return {
         "status": "ok",
         "auth": health.status.value,
         "adapter": getattr(auth_adapter, "adapter_version", "unknown"),
+        "transport": "codex-app-server" if real_profile else "direct-test-upstream",
+        "approval_policy": "on-request" if real_profile else "synthetic-test-only",
+        "sandbox": "read-only" if real_profile else "synthetic-test-only",
         "codex_version": stored.get("codex_version", "unknown"),
         "pinned_adapter": stored.get("adapter_version", getattr(auth_adapter, "adapter_version", "unknown")),
         "rollback_adapter": stored.get("adapter_previous"),
@@ -20,7 +24,7 @@ def build_status(auth_adapter, store=None, config=None):
 
 def render_html(status):
     rows = []
-    for key in ("auth", "adapter", "codex_version", "pinned_adapter", "rollback_adapter", "refresh", "bind_host"):
+    for key in ("auth", "adapter", "transport", "approval_policy", "sandbox", "codex_version", "pinned_adapter", "rollback_adapter", "refresh", "bind_host"):
         rows.append("<tr><th>{}</th><td>{}</td></tr>".format(html.escape(key), html.escape(str(status.get(key) or "-"))))
     return (
         "<!doctype html><html><head><meta charset='utf-8'><title>Codex Router</title>"

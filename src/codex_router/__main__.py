@@ -42,7 +42,7 @@ def main_with_args(argv):
         return 2
     config = RouterConfig.from_env()
     store = _open_store(config)
-    auth = AuthAdapter(config.auth_path, adapter_version=config.adapter_version)
+    auth = AuthAdapter(config.auth_path, adapter_version=config.adapter_version, auth_mode=config.auth_mode)
     try:
         if args.command == "status":
             print(json.dumps(build_status(auth, store, config), indent=2))
@@ -53,8 +53,14 @@ def main_with_args(argv):
             return 0
         host = args.host or config.bind_host
         port = args.port or config.port
-        gateway = Gateway(auth, config.upstream_url)
-        server = create_server(gateway, host, port, lambda: build_status(auth, store, config))
+        gateway = Gateway(auth, config.upstream_url, app_server_command=config.codex_command)
+        server = create_server(
+            gateway,
+            host,
+            port,
+            lambda: build_status(auth, store, config),
+            router_api_key=config.router_api_key,
+        )
         print("Codex Router listening on http://%s:%s" % (host, port))
         try:
             server.serve_forever()

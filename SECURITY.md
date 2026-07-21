@@ -13,3 +13,20 @@ When reporting, include the affected version, operating system, reproduction ste
 ## Credential safety
 
 Never send a real Codex credential file to maintainers or commit it to this repository. The project intentionally fails closed when the local auth format is unknown and does not implement undocumented OAuth exchanges.
+
+The router is loopback-only. Every `/v1/*` request requires the separate
+`X-Codex-Router-Key`; `/health`, `/status`, and `/` contain safe status only.
+
+For `real-v1`, the router starts the locally installed Codex App Server over
+stdio and does not forward a Codex access or refresh token to an HTTP upstream.
+Each request uses a short-lived App Server process with `approvalPolicy=on-request`,
+`sandbox=read-only`, and an ephemeral thread. Client attempts to override these
+policies, invoke tools, or approve commands are rejected. Only agent text
+deltas are exposed, and App Server event payloads are not logged.
+
+`CODEX_ROUTER_CODEX_COMMAND` must point to a trusted local Codex CLI executable;
+the router invokes it without a shell. Treat the router API key as a local
+code-execution capability: keep it secret, keep the bind on loopback, and do
+not expose the port through a proxy or tunnel without a separate authenticated
+boundary. The App Server protocol is experimental, so compatibility evidence
+must identify the exact CLI version before a release is marked verified.
