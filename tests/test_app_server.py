@@ -37,7 +37,7 @@ class _FakeProcess:
         self.output = queue.Queue()
         self.requests = []
         self.events = events or []
-        self.models = models or [{"id": "gpt-test", "model": "gpt-test"}]
+        self.models = [{"id": "gpt-test", "model": "gpt-test"}] if models is None else models
         self.thread_error = thread_error
         self.returncode = None
         self.stdin = _FakeStdin(self)
@@ -246,6 +246,30 @@ class AppServerBridgeTests(unittest.TestCase):
         with self.assertRaises(AppServerError) as raised:
             bridge.start_chat({"model": "gpt-missing", "messages": [{"role": "user", "content": "hello"}]})
         self.assertEqual(raised.exception.code, "model_unavailable")
+
+    def test_readiness_probe_uses_one_initialize_and_model_list_without_chat(self):
+        bridge, fake = self.make_bridge(models=[{"id": "gpt-test"}])
+
+        models = bridge.probe_models(timeout=3)
+
+        self.assertEqual(models, [{"id": "gpt-test"}])
+        self.assertEqual([item.get("method") for item in fake.requests], ["initialize", "initialized", "model/list"])
+
+    def test_readiness_probe_rejects_empty_and_malformed_catalogs(self):
+        bridge, _ = self.make_bridge(models=[])
+        with self.assertRaises(AppServerError) as raised:
+            bridge.probe_models(timeout=3)
+        self.assertEqual(raised.exception.code, "model_catalog_empty")
+
+        bridge, _ = self.make_bridge(models=[{"id": "gpt-test", "model": "also-gpt"}])
+        with self.assertRaises(AppServerError) as raised:
+            bridge.probe_models(timeout=3)
+        self.assertEqual(raised.exception.code, "model_catalog_invalid")
+
+        bridge, _ = self.make_bridge(models=[{"id": "gpt-test"}, {"id": "bad\nmodel"}])
+        with self.assertRaises(AppServerError) as raised:
+            bridge.probe_models(timeout=3)
+        self.assertEqual(raised.exception.code, "model_catalog_invalid")
 
 
 if __name__ == "__main__":

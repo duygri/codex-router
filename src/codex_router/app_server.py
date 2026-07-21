@@ -7,6 +7,8 @@ import threading
 import time
 import uuid
 
+from .model_catalog import is_safe_model_id
+
 
 MAX_JSON_LINE_BYTES = 1024 * 1024
 DEFAULT_TIMEOUT_SECONDS = 120
@@ -373,8 +375,13 @@ class AppServerBridge:
         finally:
             self.waiting.release()
 
-    def _new_session(self):
-        session = _AppServerSession(self.command, self.process_factory, self.timeout, self.max_line_bytes)
+    def _new_session(self, timeout=None, max_line_bytes=None):
+        session = _AppServerSession(
+            self.command,
+            self.process_factory,
+            self.timeout if timeout is None else timeout,
+            self.max_line_bytes if max_line_bytes is None else max_line_bytes,
+        )
         try:
             session.start()
             session.request(1, "initialize", {
@@ -452,6 +459,35 @@ class AppServerBridge:
         except Exception:
             self.admission.release()
             raise
+
+    @staticmethod
+    def _validate_readiness_models(models):
+        if not isinstance(models, list):
+            raise AppServerError(502, "app_server_protocol_error", "Codex App Server returned an invalid model list")
+        if not models:
+            raise AppServerError(503, "model_catalog_empty", "Codex returned no available models")
+        allowed_keys = {"id", "model"}
+        validated = []
+        for item in models:
+            if not isinstance(item, dict) or set(item).difference(allowed_keys):
+                raise AppServerError(503, "model_catalog_invalid", "Codex returned an invalid model catalog")
+            present = [key for key in allowed_keys if key in item]
+            if len(present) != 1 or not is_safe_model_id(item.get(present[0])):
+                raise AppServerError(503, "model_catalog_invalid", "Codex returned an invalid model catalog")
+            validated.append(dict(item))
+        return validated
+
+    def probe_models(self, timeout=3.0):
+        """Run a read-only initialize/model-list probe in one process."""
+        session = None
+        try:
+            session = self._new_session(timeout=timeout, max_line_bytes=1024 * 1024)
+            result = session.request(2, "model/list", {"limit": 100})
+            models = result.get("data") if isinstance(result, dict) else None
+            return self._validate_readiness_models(models)
+        finally:
+            if session is not None:
+                session.close()
 
     def list_models(self):
         models = self.list_model_items()
