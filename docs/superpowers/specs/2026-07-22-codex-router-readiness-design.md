@@ -71,10 +71,13 @@ omitted when a check fails or is skipped. `code` is one of the stable values
 `ok`, `skipped`, `invalid_config`, `codex_cli_not_found`,
 `codex_cli_unavailable`, `app_server_unavailable`, `app_server_timeout`,
 `app_server_protocol_error`, `model_catalog_empty`, `model_catalog_invalid`,
-`model_catalog_unavailable`, or `readiness_wait_timeout`. Messages are fixed
+`model_catalog_unavailable`, `readiness_wait_timeout`, or `diagnostic_failed`.
+Messages are fixed
 allowlisted text; subprocess command lines, paths, stderr, raw exceptions, and
 model response payloads are never returned. The command exits `0` only for
-`ready`, `1` for `not_ready`, and `2` for `invalid_config`.
+`ready`, `1` for `not_ready` (including an unexpected diagnostic failure, which
+uses code `diagnostic_failed` and the fixed message `Diagnostic check failed`),
+and `2` for `invalid_config`.
 
 ### Readiness endpoint
 
@@ -98,8 +101,19 @@ concurrent callers wait at most 2 seconds for an in-flight probe, then receive
 `code: "readiness_wait_timeout"`, without starting another process. The App
 Server check performs one
 `initialize` handshake and one `model/list` request in the same probe process.
+The version subprocess has a 2-second timeout. The App Server initialize
+handshake and model-list request each have an independent 3-second timeout;
+the 2-second HTTP waiter deadline may return early while the in-flight probe
+continues and populates the cache. Both `ready` and `not_ready` outcomes are
+cached for the full 10-second TTL, so repeated callers cannot create a
+thundering herd during an outage. `codex-router doctor` always performs its
+own independent, uncached probe using the same timeouts and validation,
+regardless of whether a router process is running.
 The dashboard consumes this shared result rather than spawning a separate
 probe. `/health` remains process-only and does not call readiness.
+The endpoint is subject to the same loopback-only bind validation as
+`/health`, `/status`, and `/v1/*`; no additional firewall or remote-access
+configuration is introduced.
 
 ### Dashboard
 
@@ -114,19 +128,26 @@ details.
   messages or subprocess exceptions.
 - Apply a strict timeout to version and App Server probes.
 - Invoke subprocesses with an argv list and `shell=False`; suppress stderr,
-  cap stdout to 64 KiB, parse only a strict Codex version token, and never
-  return raw subprocess output.
-- Always terminate the probe process in a `finally` path.
+  cap version output to 64 KiB, cap App Server JSON-RPC input to 1 MiB per
+  line, parse only a strict Codex version token, and never return raw
+  subprocess output. Exceeding either cap is a safe protocol/unavailable
+  failure, never a truncated parse success.
+- Always terminate the probe process in a `finally` path, escalating from
+  graceful termination to kill after a short grace period and cleaning up the
+  process group when supported.
 - Treat missing executable, non-zero version command, handshake failure,
   timeout, malformed JSON, and empty model catalog as safe readiness failures.
 - Never retry a failed readiness probe inside the same request.
 - Use the existing `ModelCatalog` model-ID validation rules for non-empty
   `model/list` results, but validate the raw list strictly before normalization:
-  every item must be an object with exactly one usable string `id` or `model`
-  field, and every identifier must pass the existing safe model-ID validator.
-  A mixed valid/malformed list is `model_catalog_invalid`; an empty list is
-  `model_catalog_empty`; App Server protocol/transport failures map to
-  `model_catalog_unavailable`.
+  every item must be an object with exactly one of the keys `id` or `model`
+  present; the other key must be absent, not null or empty. The one present
+  value must be a non-empty string passing the existing safe model-ID
+  validator. An item containing both keys, neither key, an invalid value, or
+  an unknown field is invalid and makes the whole list
+  `model_catalog_invalid`. A mixed valid/malformed list is therefore never
+  partially accepted. An empty list is `model_catalog_empty`; App Server
+  protocol/transport failures map to `model_catalog_unavailable`.
 - Preserve the existing fixed App Server policy and no-direct-bearer design.
 
 ## Testing strategy
@@ -136,8 +157,13 @@ details.
 - HTTP tests for `/health` remaining cheap, `/ready` status mapping, safe
   envelope fields, loopback restriction, and synthetic-v1 behavior.
 - Coordination tests for 10-second cache reuse, 2-second waiter timeout, and
-  cleanup of a failed in-flight probe.
+  cleanup of a failed in-flight probe, including reuse of a cached `not_ready`
+  result. Tests inject a fake clock rather than sleeping for real TTL/timeout
+  durations.
 - CLI tests for doctor exit codes and secret-free output.
+- Tests confirm doctor uses an independent uncached probe, `/ready` remains
+  loopback-only under the existing bind policy, and process-group cleanup is
+  attempted without leaking raw subprocess output.
 - Existing full suite, compile check, diff check, and secret scan must remain
   green. The live no-cost `model/list` smoke is manual/maintainer-side only,
   enabled by an explicit local Codex CLI path and existing `codex login`; it is
