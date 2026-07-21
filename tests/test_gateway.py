@@ -28,6 +28,14 @@ class FakeResponse:
     def getcode(self):
         return self.status
 
+    def iter_bytes(self):
+        body = self.read()
+        if body:
+            yield body
+
+    def close(self):
+        return None
+
 
 class GatewayTests(unittest.TestCase):
     def make_auth_file(self):
@@ -244,6 +252,80 @@ class GatewayTests(unittest.TestCase):
 
         self.assertEqual(tracker.snapshot()["cancelled_requests"], 1)
         self.assertEqual(tracker.snapshot()["active_requests"], 0)
+
+    def test_real_profile_adapts_text_responses_api_to_codex(self):
+        app_server = mock.Mock()
+        app_server.start_chat.return_value = FakeResponse(body=json.dumps({
+            "id": "chatcmpl-test",
+            "model": "gpt-router",
+            "choices": [{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+        }).encode("utf-8"))
+        catalog = ModelCatalog(lambda: [{"id": "gpt-router"}])
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=catalog,
+        )
+
+        response = gateway.open_responses({
+            "model": "codex",
+            "instructions": "Be concise.",
+            "input": "Say hello",
+        })
+        payload = json.loads(response.read().decode("utf-8"))
+
+        self.assertEqual(payload["object"], "response")
+        self.assertEqual(payload["output_text"], "hello")
+        app_server.start_chat.assert_called_once_with({
+            "model": "gpt-router",
+            "messages": [
+                {"role": "system", "content": "Be concise."},
+                {"role": "user", "content": "Say hello"},
+            ],
+            "stream": False,
+        })
+
+    def test_responses_api_rejects_tools_and_multimodal_input(self):
+        app_server = mock.Mock()
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=ModelCatalog(lambda: [{"id": "gpt-router"}]),
+        )
+        with self.assertRaises(GatewayError) as raised:
+            gateway.open_responses({"input": "hello", "tools": []})
+        self.assertEqual(raised.exception.code, "unsupported_request_options")
+        with self.assertRaises(GatewayError) as raised:
+            gateway.open_responses({"input": [{"type": "message", "role": "user", "content": [{"type": "input_image", "image_url": "x"}]}]})
+        self.assertEqual(raised.exception.code, "unsupported_input")
+        app_server.start_chat.assert_not_called()
+
+    def test_real_profile_streams_responses_text_events(self):
+        app_server = mock.Mock()
+        app_server.start_chat.return_value = FakeResponse(
+            body=(
+                b'data: {"id":"chatcmpl-test","choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}\n\n'
+                b'data: {"id":"chatcmpl-test","choices":[{"delta":{"content":"hello"},"finish_reason":null}]}\n\n'
+                b'data: {"id":"chatcmpl-test","choices":[{"delta":{},"finish_reason":"stop"}]}\n\n'
+                b'data: [DONE]\n\n'
+            ),
+            content_type="text/event-stream",
+        )
+        gateway = Gateway(
+            AuthAdapter("missing.json", adapter_version="real-v1"),
+            "https://api.openai.com/v1",
+            app_server=app_server,
+            model_catalog=ModelCatalog(lambda: [{"id": "gpt-router"}]),
+        )
+
+        body = gateway.open_responses({"model": "codex", "input": "hello", "stream": True}).read().decode("utf-8")
+
+        self.assertIn("event: response.created", body)
+        self.assertIn("event: response.output_text.delta", body)
+        self.assertIn('"delta":"hello"', body)
+        self.assertIn("event: response.completed", body)
 
 
 if __name__ == "__main__":

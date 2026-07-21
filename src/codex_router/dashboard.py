@@ -31,6 +31,7 @@ def build_status(auth_adapter, store=None, config=None):
         "rollback_adapter": stored.get("adapter_previous"),
         "refresh": "reauth_required_or_unsupported",
         "bind_host": getattr(config, "bind_host", "127.0.0.1"),
+        "port": getattr(config, "port", 20128),
     }
 
 
@@ -60,17 +61,26 @@ def build_dashboard_data(auth_adapter, store, config, gateway):
     usage = tracker.snapshot() if tracker is not None else _empty_usage()
     capabilities = {
         "chat_completions": True,
-        "responses": False,
+        "responses": True,
+        "responses_text_only": True,
         "streaming": True,
         "approval_policy": status["approval_policy"],
         "sandbox": status["sandbox"],
         "tools": False,
+        "multimodal": False,
     }
+    bind_host = getattr(config, "bind_host", "127.0.0.1") if config is not None else "127.0.0.1"
+    port = getattr(config, "port", 20128) if config is not None else 20128
     return {
         "status": status,
         "models": models,
         "usage": usage,
         "capabilities": capabilities,
+        "endpoint": {
+            "base_url": "http://%s:%s/v1" % (bind_host, port),
+            "auth_header": "X-Codex-Router-Key",
+            "model_alias": "codex",
+        },
         "error": error,
     }
 
@@ -116,7 +126,11 @@ def render_html(status):
     .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
     .metric { min-height: 100px; justify-content: space-between; gap: 12px; }
     .metric strong { font-size: 1.8rem; font-variant-numeric: tabular-nums; }
+    .metric small { display: block; color: var(--muted); margin-top: 4px; font-size: 0.78rem; }
     .content-grid { display: grid; gap: 20px; }
+    .endpoint-grid { display: grid; gap: 12px; }
+    .endpoint-item { display: grid; gap: 5px; }
+    .endpoint-item code { display: block; overflow-wrap: anywhere; color: #bbf7d0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
     .model-list, .capability-list { display: grid; gap: 10px; }
     .model-row, .capability { justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); padding: 10px 0; }
     .model-row:last-child, .capability:last-child { border-bottom: 0; }
@@ -124,7 +138,8 @@ def render_html(status):
     .model-meta { color: var(--muted); font-size: 0.86rem; text-align: right; }
     .footer { margin-top: 24px; color: var(--muted); font-size: 0.86rem; }
     [aria-live] { min-height: 1.5em; }
-    @media (min-width: 768px) { .shell { padding-top: 40px; } .metric-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } .content-grid { grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr); } }
+    @media (min-width: 768px) { .shell { padding-top: 40px; } .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .content-grid { grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr); } }
+    @media (min-width: 1200px) { .metric-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
     @media (min-width: 1024px) { .hero { grid-template-columns: minmax(0, 1fr) auto; align-items: end; } }
     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; } }
   </style>
@@ -146,13 +161,24 @@ def render_html(status):
         <article class="panel metric"><span class="label">Active</span><strong id="metric-active">—</strong></article>
         <article class="panel metric"><span class="label">Completed</span><strong id="metric-completed">—</strong></article>
         <article class="panel metric"><span class="label">Failed</span><strong id="metric-failed">—</strong></article>
+        <article class="panel metric"><span class="label">Input tokens</span><strong id="metric-input-tokens">—</strong><small>reported by App Server</small></article>
+        <article class="panel metric"><span class="label">Output tokens</span><strong id="metric-output-tokens">—</strong><small>reported by App Server</small></article>
+      </section>
+      <section class="panel" aria-labelledby="endpoint-title" style="margin-bottom:20px">
+        <h2 id="endpoint-title">Endpoint</h2>
+        <div class="endpoint-grid">
+          <div class="endpoint-item"><span class="label">Base URL</span><code id="endpoint-base">__ENDPOINT__</code></div>
+          <div class="endpoint-item"><span class="label">Router header</span><code id="endpoint-auth">X-Codex-Router-Key</code></div>
+          <div class="endpoint-item"><span class="label">Default model alias</span><code id="endpoint-model">codex</code></div>
+          <p class="muted">The key value is intentionally never rendered here. Configure it only in your local client environment.</p>
+        </div>
       </section>
       <div class="content-grid">
         <section class="panel" aria-labelledby="models-title"><h2 id="models-title">Model catalog</h2><div id="models" class="model-list"><p class="empty">Loading model catalog…</p></div></section>
-        <aside class="panel" aria-labelledby="capabilities-title"><h2 id="capabilities-title">Capabilities</h2><div id="capabilities" class="capability-list"><p class="empty">Loading capabilities…</p></div></aside>
+        <aside class="panel" aria-labelledby="capabilities-title"><h2 id="capabilities-title">Capabilities</h2><p class="muted">Text-only Codex routing, with execution permissions fixed by the router.</p><div id="capabilities" class="capability-list"><p class="empty">Loading capabilities…</p></div></aside>
       </div>
     </main>
-    <footer class="footer">Transport: <strong>__TRANSPORT__</strong>. Approval: <strong>__APPROVAL__</strong>. This service is intended for loopback use.</footer>
+    <footer class="footer">Transport: <strong>__TRANSPORT__</strong>. Approval: <strong>__APPROVAL__</strong>. Responses API is text-only. This service is intended for loopback use.</footer>
   </div>
   <script>
     (function () {
@@ -170,6 +196,12 @@ def render_html(status):
         document.getElementById('metric-active').textContent = text(usage.active_requests || 0);
         document.getElementById('metric-completed').textContent = text(usage.completed_requests || 0);
         document.getElementById('metric-failed').textContent = text(usage.failed_requests || 0);
+        document.getElementById('metric-input-tokens').textContent = usage.token_usage_available ? text(usage.input_tokens || 0) : '—';
+        document.getElementById('metric-output-tokens').textContent = usage.token_usage_available ? text(usage.output_tokens || 0) : '—';
+        const endpoint = data.endpoint || {};
+        document.getElementById('endpoint-base').textContent = text(endpoint.base_url);
+        document.getElementById('endpoint-auth').textContent = text(endpoint.auth_header);
+        document.getElementById('endpoint-model').textContent = text(endpoint.model_alias);
         models.replaceChildren();
         if (!(data.models || []).length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = 'No model data available.'; models.appendChild(empty); }
         (data.models || []).forEach(function (model) { const row = document.createElement('div'); row.className = 'model-row'; const id = document.createElement('span'); id.className = 'model-id'; id.textContent = text(model.id); const meta = document.createElement('span'); meta.className = 'model-meta'; meta.textContent = model.alias ? 'alias: ' + model.alias : text(model.owned_by); row.append(id, meta); models.appendChild(row); });
@@ -189,6 +221,7 @@ def render_html(status):
         "__TRANSPORT__": safe("transport"),
         "__SANDBOX__": safe("sandbox"),
         "__APPROVAL__": safe("approval_policy"),
+        "__ENDPOINT__": "http://%s:%s/v1" % (safe("bind_host", "127.0.0.1"), safe("port", "20128")),
     }
     for marker, value in replacements.items():
         template = template.replace(marker, value)

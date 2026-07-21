@@ -128,7 +128,8 @@ def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, r
                     "status": {"state": "degraded", "message": "Dashboard data is not configured."},
                     "models": [],
                     "usage": {},
-                    "capabilities": {},
+                    "capabilities": {"chat_completions": True, "responses": True, "responses_text_only": True, "tools": False, "multimodal": False},
+                    "endpoint": {"base_url": "http://127.0.0.1:20128/v1", "auth_header": "X-Codex-Router-Key", "model_alias": "codex"},
                     "error": {"code": "dashboard_data_unavailable", "message": "Dashboard data is not configured."},
                 }
                 self._send_json(200, data)
@@ -163,10 +164,11 @@ def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, r
             try:
                 if self.path.startswith("/v1/"):
                     self._require_router_key()
-                if self.path != "/v1/chat/completions":
+                if self.path not in ("/v1/chat/completions", "/v1/responses"):
                     raise GatewayError(404, "not_found", "Route not found")
                 payload = self._read_json()
-                self._proxy(gateway.open_chat(payload))
+                response = gateway.open_responses(payload) if self.path == "/v1/responses" else gateway.open_chat(payload)
+                self._proxy(response)
             except GatewayError as error:
                 self._send_error(error)
 

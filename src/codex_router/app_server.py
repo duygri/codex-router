@@ -227,6 +227,10 @@ class _CompletionResponse:
         self.completed = False
         self.completion_id = "chatcmpl-" + uuid.uuid4().hex
         self.created = int(time.time())
+        self.usage_callback = None
+
+    def set_usage_callback(self, callback):
+        self.usage_callback = callback
 
     def _sse(self, payload):
         return ("data: " + json.dumps(payload, separators=(",", ":")) + "\n\n").encode("utf-8")
@@ -276,6 +280,11 @@ class _CompletionResponse:
                     text_parts.append(delta)
                     if self.stream:
                         yield self._chunk({"content": delta})
+                    continue
+                if method == "thread/tokenUsage/updated":
+                    usage = params.get("tokenUsage") or params.get("usage")
+                    if callable(self.usage_callback):
+                        self.usage_callback(usage)
                     continue
                 if method != "turn/completed":
                     continue

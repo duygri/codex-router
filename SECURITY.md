@@ -22,13 +22,16 @@ stdio and does not forward a Codex access or refresh token to an HTTP upstream.
 Each request uses a short-lived App Server process with `approvalPolicy=on-request`,
 `sandbox=read-only`, and an ephemeral thread. Client attempts to override these
 policies, invoke tools, or approve commands are rejected. Only agent text
-deltas are exposed, and App Server event payloads are not logged.
+deltas are exposed, and App Server event payloads are not logged. The
+`/v1/responses` surface is a text-only translation layer; tools and multimodal
+inputs are rejected.
 
 The dashboard at `/` and its safe `/dashboard/data` endpoint expose only local
 operational metadata. `/dashboard/data` does not require the router key because
 it contains no credentials, prompt content, response content, or raw App Server
 events; `/v1/*` continues to require `X-Codex-Router-Key`. Usage tracking stores
-only aggregate counters and validated model identifiers.
+only aggregate counters, validated model identifiers, and validated numeric
+token totals when App Server reports them.
 
 `CODEX_ROUTER_CODEX_COMMAND` must point to a trusted local Codex CLI executable;
 the router invokes it without a shell. Treat the router API key as a local

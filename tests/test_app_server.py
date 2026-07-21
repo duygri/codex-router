@@ -146,6 +146,29 @@ class AppServerBridgeTests(unittest.TestCase):
         self.assertIn(b"[DONE]", body)
         self.assertNotIn(b"secret command output", body)
 
+    def test_token_usage_notification_is_forwarded_as_numeric_usage_only(self):
+        bridge, _ = self.make_bridge([
+            {"method": "thread/tokenUsage/updated", "params": {
+                "threadId": "thr_test",
+                "tokenUsage": {"total": {"inputTokens": 7, "outputTokens": 3, "totalTokens": 10}},
+            }},
+            {"method": "item/agentMessage/delta", "params": {
+                "threadId": "thr_test", "turnId": "turn_test", "delta": "ok",
+            }},
+            {"method": "turn/completed", "params": {
+                "threadId": "thr_test",
+                "turn": {"id": "turn_test", "status": "completed"},
+            }},
+        ])
+        usage = []
+        response = bridge.start_chat({
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        })
+        response.set_usage_callback(usage.append)
+        list(response.iter_bytes())
+        self.assertEqual(usage, [{"total": {"inputTokens": 7, "outputTokens": 3, "totalTokens": 10}}])
+
     def test_approval_request_fails_closed_without_leaking_command(self):
         bridge, fake = self.make_bridge([
             {"id": 99, "method": "item/commandExecution/requestApproval", "params": {

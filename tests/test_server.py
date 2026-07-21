@@ -103,6 +103,16 @@ class ServerTests(unittest.TestCase):
         self.assertIn(("Content-Type", "text/event-stream"), headers)
         self.assertIn(b"[DONE]", body)
 
+    def test_responses_route_is_explicitly_rejected_for_synthetic_adapter(self):
+        status, _, body = self.request(
+            "POST",
+            "/v1/responses",
+            {"input": "hello"},
+            {"X-Codex-Router-Key": "router-secret"},
+        )
+        self.assertEqual(status, 501)
+        self.assertIn(b'"code":"responses_not_supported"', body)
+
     def test_v1_requires_router_key(self):
         status, _, body = self.request("GET", "/v1/models")
         self.assertEqual(status, 401)

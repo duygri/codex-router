@@ -12,8 +12,9 @@ a known Codex CLI/App Server version produces a successful, no-cost
 - Expired CLI sessions require `codex login` again.
 - The App Server bridge is text-only in the MVP and fixes approval to
   `on-request` with a `read-only` sandbox.
-- Phase A adds a local `codex` model alias, normalized model catalog, and
-  aggregate-only usage dashboard; it does not claim Responses API or tools.
+- Phase B adds a text-only `/v1/responses` compatibility surface and numeric
+  token aggregates from App Server notifications; it does not claim tools or
+  multimodal input support.
 - Unknown Codex versions remain unverified even if a local smoke check passes.
 
 Future compatibility work must use synthetic or irreversibly redacted fixtures. Never commit an account credential, raw token, personal machine path, or log containing an authorization header.
