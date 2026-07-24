@@ -539,5 +539,67 @@ class AppServerBridge:
                 session.close()
             self.admission.release()
 
+        def probe_account(self, timeout=3.0):
+                    """Read safe account state without exposing account identifiers."""
+            session = None
+        try:
+            session = self._new_session(
+                timeout=timeout,
+                max_line_bytes=1024 * 1024,
+            )
+            result = session.request(
+                2,
+                "account/read",
+                {"refreshToken": False},
+            )
+            return self._validate_account_status(result)
+        finally:
+            if session is not None:
+                session.close()
+
+        @staticmethod
+            def _validate_account_status(result):
+                from .account_status import AccountStatus
+
+    if not isinstance(result, dict):
+        raise AppServerError(
+            502,
+            "account_status_invalid",
+            "Codex App Server returned an invalid account status",
+        )
+        account = result.get("account")
+
+    if account is None:
+        return AccountStatus(
+            state="unauthenticated",
+            message="Run codex login before using the router",
+        )
+
+    if not isinstance(account, dict):
+        raise AppServerError(
+            502,
+            "account_status_invalid",
+            "Codex App Server returned an invalid account status",
+        )
+        auth_mode = account.get("type")
+
+    if (
+        not isinstance(auth_mode, str)
+        or not auth_mode
+        or len(auth_mode) > 64
+        or "\n" in auth_mode
+        or "\r" in auth_mode
+    ):
+        raise AppServerError(
+            502,
+            "account_status_invalid",
+            "Codex App Server returned an invalid account status",
+        )
+        return AccountStatus(
+            state="authenticated",
+            auth_mode=auth_mode,
+            message="Codex account is authenticated",
+        )
+        
     def close(self):
         return None
