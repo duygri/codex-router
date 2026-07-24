@@ -24,7 +24,7 @@ def _is_loopback_bind(host):
     return (host or "").lower().rstrip(".") in ("127.0.0.1", "localhost", "::1")
 
 
-def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, router_api_key=None, dashboard_data_provider=None, readiness_provider=None):
+def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, router_api_key=None, dashboard_data_provider=None, readiness_provider=None, account_status_provider=None):
     if not _is_loopback_bind(host):
         raise ValueError("Codex Router only supports loopback binds")
 
@@ -170,10 +170,10 @@ def create_server(gateway, host="127.0.0.1", port=20128, status_provider=None, r
                 self._send_json(200, status)
                 return
             if self.path == "/health":
-                auth = gateway.auth_adapter.health_check()
+                                auth_state = account_status_provider().state if (getattr(gateway.auth_adapter, "adapter_version", "") == "real-v1" and account_status_provider is not None) else gateway.auth_adapter.health_check().status.value
                 self._send_json(200, {
                     "status": "ok",
-                    "auth": auth.status.value,
+                    "auth": auth_state,
                     "adapter": gateway.auth_adapter.adapter_version,
                 })
                 return
