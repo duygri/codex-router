@@ -1,10 +1,20 @@
 # Codex compatibility status
 
-The current MVP deliberately does not claim an official Codex OAuth contract.
+The router uses the official Codex App Server for `real-v1`, but compatibility
+is still versioned and fail-closed. The registry is only marked `verified` after
+a known Codex CLI/App Server version produces a successful, no-cost
+`model/list` check and a reviewer persists the secret-free evidence record.
 
-- The Codex executable is present on the development machine, but it could not be executed from the current Windows environment because the process was denied access.
-- No real credential file was read or copied during development.
-- No command, exit code, output format, timeout, or side effect for Codex session refresh has been verified.
-- Therefore the MVP supports session validation plus `reauth_required` and `unsupported` outcomes. The `refreshed` outcome remains disabled until a sanitized, user-authorized fixture and a versioned subprocess contract are verified.
+- The real-v1 adapter uses the Codex CLI process as the authentication owner;
+  the router does not forward a bearer token to a public HTTP API.
+- The router never writes the credential store or calls an undocumented OAuth
+  exchange/refresh endpoint.
+- Expired CLI sessions require `codex login` again.
+- The App Server bridge is text-only in the MVP and fixes approval to
+  `on-request` with a `read-only` sandbox.
+- Phase B adds a text-only `/v1/responses` compatibility surface and numeric
+  token aggregates from App Server notifications; it does not claim tools or
+  multimodal input support.
+- Unknown Codex versions remain unverified even if a local smoke check passes.
 
 Future compatibility work must use synthetic or irreversibly redacted fixtures. Never commit an account credential, raw token, personal machine path, or log containing an authorization header.

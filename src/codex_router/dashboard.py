@@ -3,29 +3,282 @@
 import html
 
 
-def build_status(auth_adapter, store=None, config=None):
-    health = auth_adapter.health_check()
+def _empty_usage():
+    return {
+        "total_requests": 0,
+        "completed_requests": 0,
+        "failed_requests": 0,
+        "cancelled_requests": 0,
+        "active_requests": 0,
+        "last_request_at": None,
+        "by_model": [],
+    }
+
+def _resolve_auth_status(auth_adapter, account_status_provider=None):
+        """Return auth state dict without touching the credential store for real-v1."""
+        real_profile = getattr(auth_adapter, "adapter_version", "") == "real-v1"
+
+    if not real_profile:
+                health = auth_adapter.health_check()
+                return {
+                                "state": health.status.value,
+                                "auth_mode": None,
+                }
+
+    if account_status_provider is None:
+                return {
+                                "state": "unavailable",
+                                "auth_mode": None,
+                }
+
+    try:
+                status = account_status_provider()
+except Exception:
+            return {
+                            "state": "unavailable",
+                            "auth_mode": None,
+            }
+
+    return {
+                "state": status.state,
+                "auth_mode": status.auth_mode,
+    }
+
+
+
+
+def build_status(auth_adapter, store=None, config=None, account_status_provider=None):
+        account = _resolve_auth_status(auth_adapter, account_status_provider)
     stored = {} if store is None else store.snapshot()
+    real_profile = getattr(auth_adapter, "adapter_version", "") == "real-v1"
     return {
         "status": "ok",
-        "auth": health.status.value,
+      "auth": account["state"],
+        "auth_mode": account["auth_mode"],
         "adapter": getattr(auth_adapter, "adapter_version", "unknown"),
+        "transport": "codex-app-server" if real_profile else "direct-test-upstream",
+        "approval_policy": "on-request" if real_profile else "synthetic-test-only",
+        "sandbox": "read-only" if real_profile else "synthetic-test-only",
         "codex_version": stored.get("codex_version", "unknown"),
         "pinned_adapter": stored.get("adapter_version", getattr(auth_adapter, "adapter_version", "unknown")),
         "rollback_adapter": stored.get("adapter_previous"),
         "refresh": "reauth_required_or_unsupported",
         "bind_host": getattr(config, "bind_host", "127.0.0.1"),
+        "port": getattr(config, "port", 20128),
+        "router_key": "configured" if getattr(config, "router_api_key", "") else "not_configured",
+        "config_error": getattr(config, "config_error", "") or None,
+        "queue_size": getattr(config, "queue_size", 2),
+        "queue_timeout": getattr(config, "queue_timeout", 30.0),
+    }
+
+
+def build_dashboard_data(auth_adapter, store, config, gateway, readiness_probe=None, account_status_provider=None):
+    account = _resolve_auth_status(auth_adapter, account_status_provider)
+    real_profile = getattr(auth_adapter, "adapter_version", "") == "real-v1"
+    status = {
+        "state": "ok",
+      "auth": account["state"],
+        "session": account["state"],
+        "transport": "codex-app-server" if real_profile else "direct-test-upstream",
+        "approval_policy": "on-request" if real_profile else "synthetic-test-only",
+        "sandbox": "read-only" if real_profile else "synthetic-test-only",
+        "message": "Router key is not configured; run codex-router init." if not getattr(config, "router_api_key", "") else None,
+    }
+    if readiness_probe is not None:
+        try:
+            readiness = readiness_probe.check().to_dict()
+            status["readiness"] = readiness["status"]
+            if readiness["status"] != "ready":
+                status["state"] = "degraded"
+                failed = next((item for item in readiness["checks"].values() if not item.get("ok")), None)
+                status["message"] = ("Readiness: " + failed["message"]) if failed else "Codex readiness is not available; retry refresh."
+        except Exception:
+            status["state"] = "degraded"
+            status["readiness"] = "not_ready"
+            status["message"] = "Readiness is temporarily unavailable; retry refresh."
+    models = []
+    error = None
+    try:
+        if hasattr(gateway, "dashboard_models"):
+            models = gateway.dashboard_models()
+    except Exception as exception:
+        code = getattr(exception, "code", "dashboard_data_unavailable")
+        status["state"] = "degraded"
+        status["message"] = "Model data is temporarily unavailable; retry refresh."
+        error = {"code": code, "message": status["message"]}
+    tracker = getattr(gateway, "usage_tracker", None)
+    usage = tracker.snapshot() if tracker is not None else _empty_usage()
+    capabilities = {
+        "chat_completions": True,
+        "responses": True,
+        "responses_text_only": True,
+        "streaming": True,
+        "approval_policy": status["approval_policy"],
+        "sandbox": status["sandbox"],
+        "tools": False,
+        "multimodal": False,
+        "router_key_configured": bool(getattr(config, "router_api_key", "")),
+        "queue_size": getattr(config, "queue_size", 2),
+        "queue_timeout_seconds": getattr(config, "queue_timeout", 30.0),
+    }
+    bind_host = getattr(config, "bind_host", "127.0.0.1") if config is not None else "127.0.0.1"
+    port = getattr(config, "port", 20128) if config is not None else 20128
+    return {
+        "status": status,
+        "models": models,
+        "usage": usage,
+        "capabilities": capabilities,
+        "endpoint": {
+            "base_url": "http://%s:%s/v1" % (bind_host, port),
+            "auth_header": "X-Codex-Router-Key",
+            "model_alias": "codex",
+            "router_key_configured": bool(getattr(config, "router_api_key", "")),
+        },
+        "error": error,
     }
 
 
 def render_html(status):
-    rows = []
-    for key in ("auth", "adapter", "codex_version", "pinned_adapter", "rollback_adapter", "refresh", "bind_host"):
-        rows.append("<tr><th>{}</th><td>{}</td></tr>".format(html.escape(key), html.escape(str(status.get(key) or "-"))))
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'><title>Codex Router</title>"
-        "<style>body{{font-family:system-ui;max-width:720px;margin:40px auto;padding:0 16px}}"
-        "table{{border-collapse:collapse;width:100%}}th,td{{text-align:left;border-bottom:1px solid #ddd;padding:8px}}</style>"
-        "</head><body><h1>Codex Router</h1><p>Local status only. Secrets are never displayed.</p>"
-        "<table>{}</table></body></html>"
-    ).format("".join(rows))
+    def safe(key, fallback="-"):
+        return html.escape(str(status.get(key) or fallback), quote=True)
+
+    template = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Codex Router Operations</title>
+  <style>
+    :root {
+      --bg: #0b1120; --surface: #111827; --raised: #172033; --border: #2b3952;
+      --text: #f8fafc; --muted: #a8b4c7; --accent: #22c55e; --warning: #f59e0b;
+      --danger: #f87171; --focus: #7dd3fc; --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-width: 320px; background: var(--bg); color: var(--text); font-family: Inter, "Segoe UI", system-ui, sans-serif; line-height: 1.5; }
+    button { min-height: 44px; border: 1px solid var(--border); border-radius: 10px; background: var(--raised); color: var(--text); padding: 0 16px; font: inherit; cursor: pointer; transition: background 180ms ease, border-color 180ms ease; }
+    button:hover { background: #22304a; border-color: var(--focus); }
+    button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+    .shell { width: min(1200px, calc(100% - 32px)); margin: 0 auto; padding: 24px 0 48px; }
+    .topbar, .topbar-group, .status-line, .metric, .model-row, .capability { display: flex; align-items: center; }
+    .topbar { justify-content: space-between; gap: 16px; margin-bottom: 32px; }
+    .topbar-group { gap: 12px; flex-wrap: wrap; }
+    .brand { color: var(--text); text-decoration: none; font-weight: 700; letter-spacing: -0.02em; }
+    .eyebrow, .label { color: var(--muted); font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; }
+    .panel { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); padding: 20px; }
+    .hero { display: grid; gap: 20px; margin-bottom: 20px; }
+    h1, h2, p { margin-top: 0; }
+    h1 { margin-bottom: 8px; font-size: clamp(1.7rem, 4vw, 2.5rem); letter-spacing: -0.04em; }
+    h2 { margin-bottom: 16px; font-size: 1rem; }
+    .muted, .empty { color: var(--muted); }
+    .status-line { gap: 10px; flex-wrap: wrap; }
+    .badge { display: inline-flex; align-items: center; min-height: 28px; border: 1px solid var(--border); border-radius: 999px; padding: 0 10px; color: var(--muted); font-size: 0.82rem; }
+    .badge.good { border-color: #19733b; color: #86efac; }
+    .badge.warn { border-color: #9a6b12; color: #fcd34d; }
+    .metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
+    .metric { min-height: 100px; justify-content: space-between; gap: 12px; }
+    .metric strong { font-size: 1.8rem; font-variant-numeric: tabular-nums; }
+    .metric small { display: block; color: var(--muted); margin-top: 4px; font-size: 0.78rem; }
+    .content-grid { display: grid; gap: 20px; }
+    .endpoint-grid { display: grid; gap: 12px; }
+    .endpoint-item { display: grid; gap: 5px; }
+    .endpoint-item code { display: block; overflow-wrap: anywhere; color: #bbf7d0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .model-list, .capability-list { display: grid; gap: 10px; }
+    .model-row, .capability { justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--border); padding: 10px 0; }
+    .model-row:last-child, .capability:last-child { border-bottom: 0; }
+    .model-id { min-width: 0; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .model-meta { color: var(--muted); font-size: 0.86rem; text-align: right; }
+    .footer { margin-top: 24px; color: var(--muted); font-size: 0.86rem; }
+    [aria-live] { min-height: 1.5em; }
+    @media (min-width: 768px) { .shell { padding-top: 40px; } .metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } .content-grid { grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr); } }
+    @media (min-width: 1200px) { .metric-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+    @media (min-width: 1024px) { .hero { grid-template-columns: minmax(0, 1fr) auto; align-items: end; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="topbar-group"><a class="brand" href="/">Codex Router</a><span class="eyebrow">Operations dashboard</span></div>
+      <button id="refresh" type="button" aria-label="Refresh dashboard">Refresh dashboard</button>
+    </header>
+    <main>
+      <section class="hero panel" aria-labelledby="page-title">
+        <div><p class="eyebrow">Local control plane</p><h1 id="page-title">Codex Router Operations</h1><p class="muted">Monitor the Codex App Server boundary without exposing credentials or prompt content.</p></div>
+        <div class="status-line" aria-label="Current transport status"><span id="status-badge" class="badge">__AUTH__</span><span class="badge">__TRANSPORT__</span><span class="badge">sandbox: __SANDBOX__</span></div>
+      </section>
+      <p id="live-message" class="muted" aria-live="polite">Local-only status. Secrets are never displayed.</p>
+      <section class="metric-grid" aria-label="Usage metrics">
+        <article class="panel metric"><span class="label">Total requests</span><strong id="metric-total">—</strong></article>
+        <article class="panel metric"><span class="label">Active</span><strong id="metric-active">—</strong></article>
+        <article class="panel metric"><span class="label">Completed</span><strong id="metric-completed">—</strong></article>
+        <article class="panel metric"><span class="label">Failed</span><strong id="metric-failed">—</strong></article>
+        <article class="panel metric"><span class="label">Input tokens</span><strong id="metric-input-tokens">—</strong><small>reported by App Server</small></article>
+        <article class="panel metric"><span class="label">Output tokens</span><strong id="metric-output-tokens">—</strong><small>reported by App Server</small></article>
+      </section>
+      <section class="panel" aria-labelledby="endpoint-title" style="margin-bottom:20px">
+        <h2 id="endpoint-title">Endpoint</h2>
+        <div class="endpoint-grid">
+          <div class="endpoint-item"><span class="label">Base URL</span><code id="endpoint-base">__ENDPOINT__</code></div>
+          <div class="endpoint-item"><span class="label">Router header</span><code id="endpoint-auth">X-Codex-Router-Key</code></div>
+          <div class="endpoint-item"><span class="label">Default model alias</span><code id="endpoint-model">codex</code></div>
+          <div class="endpoint-item"><span class="label">Router key</span><code id="endpoint-key-state">__KEY_STATE__</code></div>
+          <p class="muted">The key value is intentionally never rendered here. Configure it only in your local client environment.</p>
+        </div>
+      </section>
+      <div class="content-grid">
+        <section class="panel" aria-labelledby="models-title"><h2 id="models-title">Model catalog</h2><div id="models" class="model-list"><p class="empty">Loading model catalog…</p></div></section>
+        <aside class="panel" aria-labelledby="capabilities-title"><h2 id="capabilities-title">Capabilities</h2><p class="muted">Text-only Codex routing, with execution permissions fixed by the router.</p><div id="capabilities" class="capability-list"><p class="empty">Loading capabilities…</p></div></aside>
+      </div>
+    </main>
+    <footer class="footer">Transport: <strong>__TRANSPORT__</strong>. Approval: <strong>__APPROVAL__</strong>. Responses API is text-only. This service is intended for loopback use.</footer>
+  </div>
+  <script>
+    (function () {
+      const refresh = document.getElementById('refresh');
+      const message = document.getElementById('live-message');
+      const models = document.getElementById('models');
+      const capabilities = document.getElementById('capabilities');
+      function text(value) { return value === null || value === undefined ? '—' : String(value); }
+      function render(data) {
+        const usage = data.usage || {};
+        const state = (data.status || {}).state || 'degraded';
+        document.getElementById('status-badge').textContent = state;
+        document.getElementById('status-badge').className = 'badge ' + (state === 'ok' ? 'good' : 'warn');
+        document.getElementById('metric-total').textContent = text(usage.total_requests || 0);
+        document.getElementById('metric-active').textContent = text(usage.active_requests || 0);
+        document.getElementById('metric-completed').textContent = text(usage.completed_requests || 0);
+        document.getElementById('metric-failed').textContent = text(usage.failed_requests || 0);
+        document.getElementById('metric-input-tokens').textContent = usage.token_usage_available ? text(usage.input_tokens || 0) : '—';
+        document.getElementById('metric-output-tokens').textContent = usage.token_usage_available ? text(usage.output_tokens || 0) : '—';
+        const endpoint = data.endpoint || {};
+        document.getElementById('endpoint-base').textContent = text(endpoint.base_url);
+        document.getElementById('endpoint-auth').textContent = text(endpoint.auth_header);
+        document.getElementById('endpoint-model').textContent = text(endpoint.model_alias);
+        document.getElementById('endpoint-key-state').textContent = endpoint.router_key_configured ? 'configured' : 'not configured';
+        models.replaceChildren();
+        if (!(data.models || []).length) { const empty = document.createElement('p'); empty.className = 'empty'; empty.textContent = 'No model data available.'; models.appendChild(empty); }
+        (data.models || []).forEach(function (model) { const row = document.createElement('div'); row.className = 'model-row'; const id = document.createElement('span'); id.className = 'model-id'; id.textContent = text(model.id); const meta = document.createElement('span'); meta.className = 'model-meta'; meta.textContent = model.alias ? 'alias: ' + model.alias : text(model.owned_by); row.append(id, meta); models.appendChild(row); });
+        capabilities.replaceChildren();
+        Object.keys(data.capabilities || {}).forEach(function (key) { const row = document.createElement('div'); row.className = 'capability'; const label = document.createElement('span'); label.textContent = key.replace(/_/g, ' '); const value = document.createElement('strong'); value.textContent = text(data.capabilities[key]); row.append(label, value); capabilities.appendChild(row); });
+        message.textContent = (data.status || {}).message || (data.error || {}).message || 'Dashboard refreshed.';
+      }
+      async function load() { refresh.disabled = true; refresh.textContent = 'Refreshing…'; message.textContent = 'Refreshing dashboard data…'; try { const response = await fetch('/dashboard/data', { cache: 'no-store' }); if (!response.ok) throw new Error('Dashboard data unavailable'); render(await response.json()); } catch (error) { message.textContent = 'Refresh failed. Check the local router and retry.'; } finally { refresh.disabled = false; refresh.textContent = 'Refresh dashboard'; } }
+      refresh.addEventListener('click', load);
+      load();
+    }());
+  </script>
+</body>
+</html>"""
+    replacements = {
+        "__AUTH__": safe("auth"),
+        "__TRANSPORT__": safe("transport"),
+        "__SANDBOX__": safe("sandbox"),
+        "__APPROVAL__": safe("approval_policy"),
+        "__ENDPOINT__": "http://%s:%s/v1" % (safe("bind_host", "127.0.0.1"), safe("port", "20128")),
+        "__KEY_STATE__": safe("router_key", "not_configured"),
+    }
+    for marker, value in replacements.items():
+        template = template.replace(marker, value)
+    return template

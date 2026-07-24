@@ -5,8 +5,9 @@ import unittest
 
 from codex_router.auth import AuthAdapter
 from codex_router.config import RouterConfig
-from codex_router.dashboard import build_status, render_html
+from codex_router.dashboard import build_dashboard_data, build_status, render_html
 from codex_router.__main__ import build_parser
+from codex_router.readiness import CheckResult, ReadinessReport
 from codex_router.storage import MetadataStore
 
 
@@ -30,16 +31,126 @@ class DashboardTests(unittest.TestCase):
         self.addCleanup(store.close)
         store.set("adapter_version", "synthetic-v1")
         config = RouterConfig(auth_path=self.auth_path, database_path=self.db_path)
-        status = build_status(AuthAdapter(self.auth_path), store, config)
+        status = build_status(AuthAdapter(self.auth_path, adapter_version="synthetic-v1"), store, config)
         self.assertEqual(status["auth"], "valid")
         self.assertEqual(status["adapter"], "synthetic-v1")
         self.assertNotIn("access_token", json.dumps(status))
         self.assertNotIn("SYNTHETIC_ACCESS_TOKEN_ONLY", json.dumps(status))
 
     def test_html_escapes_status_values(self):
-        html = render_html({"auth": "valid", "adapter": "synthetic-v1"})
+        html = render_html({"auth": "<script>bad</script>", "adapter": "synthetic-v1"})
         self.assertIn("Codex Router", html)
+        self.assertIn("&lt;script&gt;bad&lt;/script&gt;", html)
         self.assertNotIn("SYNTHETIC_ACCESS_TOKEN_ONLY", html)
+
+    def test_dashboard_has_offline_operations_layout_and_accessibility(self):
+        html = render_html({"auth": "valid", "adapter": "real-v1", "transport": "codex-app-server"})
+        self.assertIn("Operations", html)
+        self.assertIn("Model catalog", html)
+        self.assertIn("Responses API", html)
+        self.assertIn("Endpoint", html)
+        self.assertIn("Router key", html)
+        self.assertIn("Usage", html)
+        self.assertIn('aria-live="polite"', html)
+        self.assertIn("prefers-reduced-motion", html)
+        self.assertIn("@media (min-width: 768px)", html)
+        self.assertIn("Refresh dashboard", html)
+        self.assertNotIn("fonts.googleapis.com", html)
+        self.assertNotIn("<script src=", html)
+        self.assertNotIn("😀", html)
+
+    def test_real_status_advertises_app_server_and_safe_capabilities(self):
+        config = RouterConfig(auth_path="missing.json", adapter_version="real-v1")
+        status = build_status(AuthAdapter("missing.json", adapter_version="real-v1"), config=config)
+        self.assertEqual(status["transport"], "codex-app-server")
+        self.assertEqual(status["approval_policy"], "on-request")
+        self.assertEqual(status["sandbox"], "read-only")
+
+    def test_dashboard_data_has_typed_envelope_and_models(self):
+        class FakeUsage:
+            def snapshot(self):
+                return {
+                    "total_requests": 2,
+                    "completed_requests": 1,
+                    "failed_requests": 1,
+                    "cancelled_requests": 0,
+                    "active_requests": 0,
+                    "last_request_at": "2026-07-21T00:00:00Z",
+                    "by_model": [{"model": "gpt-test", "requests": 2}],
+                }
+
+        class FakeGateway:
+            usage_tracker = FakeUsage()
+
+            def dashboard_models(self):
+                return [{"id": "codex", "alias": "codex", "owned_by": "codex-router", "available": True}]
+
+        config = RouterConfig(auth_path=self.auth_path, database_path=self.db_path, adapter_version="real-v1")
+        data = build_dashboard_data(AuthAdapter(self.auth_path, adapter_version="real-v1"), None, config, FakeGateway())
+
+        self.assertEqual(data["status"]["state"], "ok")
+        self.assertIn("session", data["status"])
+        self.assertEqual(data["models"][0]["id"], "codex")
+        self.assertEqual(data["usage"]["total_requests"], 2)
+        self.assertTrue(data["capabilities"]["responses"])
+        self.assertTrue(data["capabilities"]["responses_text_only"])
+        self.assertFalse(data["capabilities"]["tools"])
+        self.assertIn("endpoint", data)
+        self.assertFalse(data["endpoint"]["router_key_configured"])
+        self.assertNotIn("router-secret", json.dumps(data))
+        self.assertIsNone(data["error"])
+        self.assertNotIn("SYNTHETIC_ACCESS_TOKEN_ONLY", json.dumps(data))
+
+    def test_dashboard_data_degrades_without_leaking_exception_details(self):
+        class FakeGateway:
+            usage_tracker = None
+
+            def dashboard_models(self):
+                raise RuntimeError("prompt=secret should not escape")
+
+        config = RouterConfig(auth_path="missing.json", adapter_version="real-v1")
+        data = build_dashboard_data(AuthAdapter("missing.json", adapter_version="real-v1"), None, config, FakeGateway())
+
+        self.assertEqual(data["status"]["state"], "degraded")
+        self.assertEqual(data["models"], [])
+        self.assertEqual(data["error"]["code"], "dashboard_data_unavailable")
+        self.assertNotIn("prompt=secret", json.dumps(data))
+
+    def test_dashboard_uses_shared_readiness_provider_without_raw_details(self):
+        class FakeGateway:
+            usage_tracker = None
+
+            def dashboard_models(self):
+                return []
+
+        class FakeReadiness:
+            def __init__(self):
+                self.calls = 0
+
+            def check(self):
+                self.calls += 1
+                return ReadinessReport("not_ready", {
+                    "config": CheckResult.ok("Configuration is valid"),
+                    "codex_cli": CheckResult.failure("codex_cli_unavailable", "Codex CLI is unavailable"),
+                    "app_server": CheckResult.skipped("Not checked because a prerequisite failed"),
+                    "model_catalog": CheckResult.skipped("Not checked because a prerequisite failed"),
+                })
+
+        readiness = FakeReadiness()
+        config = RouterConfig(auth_path=self.auth_path, adapter_version="real-v1")
+        data = build_dashboard_data(
+            AuthAdapter(self.auth_path, adapter_version="real-v1"),
+            None,
+            config,
+            FakeGateway(),
+            readiness_probe=readiness,
+        )
+
+        self.assertEqual(data["status"]["state"], "degraded")
+        self.assertIn("readiness", data["status"])
+        self.assertIn("Codex CLI is unavailable", data["status"]["message"])
+        self.assertEqual(readiness.calls, 1)
+        self.assertNotIn("prompt=secret", json.dumps(data))
 
     def test_cli_has_serve_status_and_reset_commands(self):
         parser = build_parser()
