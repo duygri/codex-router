@@ -14,14 +14,47 @@ def _empty_usage():
         "by_model": [],
     }
 
+def _resolve_auth_status(auth_adapter, account_status_provider=None):
+        """Return auth state dict without touching the credential store for real-v1."""
+        real_profile = getattr(auth_adapter, "adapter_version", "") == "real-v1"
 
-def build_status(auth_adapter, store=None, config=None):
-    health = auth_adapter.health_check()
+    if not real_profile:
+                health = auth_adapter.health_check()
+                return {
+                                "state": health.status.value,
+                                "auth_mode": None,
+                }
+
+    if account_status_provider is None:
+                return {
+                                "state": "unavailable",
+                                "auth_mode": None,
+                }
+
+    try:
+                status = account_status_provider()
+except Exception:
+            return {
+                            "state": "unavailable",
+                            "auth_mode": None,
+            }
+
+    return {
+                "state": status.state,
+                "auth_mode": status.auth_mode,
+    }
+
+
+
+
+def build_status(auth_adapter, store=None, config=None, account_status_provider=None):
+        account = _resolve_auth_status(auth_adapter, account_status_provider)
     stored = {} if store is None else store.snapshot()
     real_profile = getattr(auth_adapter, "adapter_version", "") == "real-v1"
     return {
         "status": "ok",
-        "auth": health.status.value,
+      "auth": account["state"],
+        "auth_mode": account["auth_mode"],
         "adapter": getattr(auth_adapter, "adapter_version", "unknown"),
         "transport": "codex-app-server" if real_profile else "direct-test-upstream",
         "approval_policy": "on-request" if real_profile else "synthetic-test-only",
@@ -39,13 +72,13 @@ def build_status(auth_adapter, store=None, config=None):
     }
 
 
-def build_dashboard_data(auth_adapter, store, config, gateway, readiness_probe=None):
-    health = auth_adapter.health_check()
+def build_dashboard_data(auth_adapter, store, config, gateway, readiness_probe=None, account_status_provider=None):
+    account = _resolve_auth_status(auth_adapter, account_status_provider)
     real_profile = getattr(auth_adapter, "adapter_version", "") == "real-v1"
     status = {
         "state": "ok",
-        "auth": health.status.value,
-        "session": health.status.value,
+      "auth": account["state"],
+        "session": account["state"],
         "transport": "codex-app-server" if real_profile else "direct-test-upstream",
         "approval_policy": "on-request" if real_profile else "synthetic-test-only",
         "sandbox": "read-only" if real_profile else "synthetic-test-only",
